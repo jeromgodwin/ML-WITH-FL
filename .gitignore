@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Project data / outputs (large, not versioned)
+data/
+results/
+*.hdf5
+*.dat
+*.tar.bz2
+
+# Test / tooling caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node (Phase 11)
+node_modules/
+frontend/dist/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Malware samples (never version) / runtime logs
+quarantine/
+logs/
+

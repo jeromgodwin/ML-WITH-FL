@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fedshield"
+version = "0.1.0"
+description = "FedShield: Federated Learning-Based Malware Detection Under Non-IID Client Distributions"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.13.0",
+    "flwr>=1.33.0",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+backend = ["fastapi>=0.120", "uvicorn>=0.30"]
+
+[tool.setuptools.packages.find]
+include = ["fedshield*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

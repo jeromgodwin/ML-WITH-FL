@@ -1,0 +1,80 @@
+# Default experiment configuration for FedShield.
+# Every key is overridable via CLI (dotted keys) or programmatically.
+
+name: default
+seed: 42
+
+logging:
+  level: INFO
+  log_dir: logs
+  file_output: true
+  structured_output: false
+
+data:
+  data_dir: data
+  ember_version: "2018_2"
+
+partition:
+  strategy: iid              # iid | mild | moderate | severe | quantity_skew | label_skew | family_skew | combined_severe
+  severity: moderate         # mild | moderate | severe, or a Dirichlet alpha float
+  clients: 10
+  seed: 42
+  val_fraction: 0.1
+  min_samples_per_client: 5000
+  test_strategy: global_test # global_test | per_client
+
+model:
+  input_dim: 2381
+  hidden_layers: [256, 128]
+  dropout: 0.2
+  activation: relu
+  version: mlp-v1
+
+train:
+  batch_size: 512
+  local_epochs: 5
+  learning_rate: 0.001
+  weight_decay: 0.0
+  optimizer: adam
+  seed: 42
+  epochs: 20
+  early_stopping_patience: 3
+
+fl:
+  num_clients: 10
+  num_rounds: 30
+  client_fraction: 1.0
+  algorithm: fedavg        # fedavg | fedprox | personalized
+  proximal_mu: 0.0
+  evaluate_every: 1
+
+endpoint:
+  monitor:
+    watched_directories: ["~/Downloads"]   # add "~/Desktop", "~/Documents", or custom paths
+    recursive: true
+    stability_wait: 2.0
+    poll_interval: 1.0
+    max_file_size: 104857600
+    pe_extensions: [".exe", ".dll", ".sys", ".scr", ".com"]
+  inference:
+    model_path: "models/local_model.pt"
+    feature_schema_path: "models/feature_schema.json"
+    device: "cpu"
+    batch_size: 1
+    uncertainty_threshold: 0.5
+  risk:
+    thresholds: [0.3, 0.7]
+    actions: ["ALLOW", "WARN", "QUARANTINE"]
+  quarantine:
+    quarantine_dir: "quarantine"
+    preserve_filename: true
+    record_metadata: true
+  notifications:
+    enabled: true
+    channels: ["console", "file"]
+    notification_log: "logs/notifications.log"
+    min_level: "warn"
+  history:
+    enabled: true
+    history_db: "history/detections.db"
+    retention_days: 0

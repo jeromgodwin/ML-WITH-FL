@@ -1,0 +1,187 @@
+"""Automatic real-time malware detection pipeline (Phase 7).
+
+File identified by the monitor -> validated static feature extraction ->
+preprocessing -> local model -> risk engine -> record -> configured action.
+
+The model and extractor are loaded ONCE per detector lifetime; scan() never
+reloads them. Files are only read, never executed. Output conforms to the
+DetectionRecord schema (detection id, timestamps, hashes, probabilities,
+risk score, level, verdict, action, durations).
+"""
+
+from __future__ import annotations
+
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from fedshield.config import QuarantineConfig, RiskConfig
+from fedshield.logging_setup import get_logger
+from src.endpoint.feature_extraction import ExtractionError, FeatureExtractor
+from src.endpoint.file_analysis import analyze_pe_file, classify_file_type, compute_sha256
+from src.endpoint.quarantine import QuarantineError, QuarantineManager
+from src.endpoint.risk import RiskEngine
+from src.federated.model_bundle import InferenceBundle
+from src.interfaces import DetectionRecord
+
+logger = get_logger(__name__)
+
+
+@dataclass
+class ScanResult:
+    """A scan plus its stage timings (used for performance reporting)."""
+
+    record: DetectionRecord
+    extraction_ms: float
+    inference_ms: float
+    total_ms: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = self.record.to_dict()
+        d["feature_extraction_ms"] = round(self.extraction_ms, 3)
+        d["inference_ms"] = round(self.inference_ms, 3)
+        d["total_scan_ms"] = round(self.total_ms, 3)
+        return d
+
+
+class AutoDetector:
+    """End-to-end detector: extract -> validate -> preprocess -> predict ->
+    risk -> record -> action. Model/extractor are loaded once."""
+
+    def __init__(
+        self,
+        bundle: InferenceBundle,
+        extractor: FeatureExtractor,
+        risk: Optional[RiskEngine] = None,
+        quarantine: Optional[QuarantineConfig] = None,
+        quarantine_manager: Optional[QuarantineManager] = None,
+    ):
+        self.bundle = bundle
+        self.extractor = extractor
+        self.risk = risk or RiskEngine()
+        self.quarantine_manager = quarantine_manager or QuarantineManager(quarantine)
+        self.model_algorithm = bundle.manifest.get("algorithm", "centralized")
+        self.model_version = bundle.manifest.get("version", "unknown")
+
+    @classmethod
+    def load(
+        cls,
+        bundle_dir: Path,
+        risk: Optional[RiskEngine] = None,
+        quarantine: Optional[QuarantineConfig] = None,
+        quarantine_manager: Optional[QuarantineManager] = None,
+    ) -> "AutoDetector":
+        """Load bundle + validated extractor once for the detector lifetime."""
+        bundle_dir = Path(bundle_dir)
+        bundle = InferenceBundle.load(bundle_dir)
+        extractor = FeatureExtractor(bundle.schema)
+        return cls(bundle, extractor, risk=risk, quarantine=quarantine,
+                   quarantine_manager=quarantine_manager)
+
+    # ------------------------------------------------------------------
+    # the 12-step pipeline
+    # ------------------------------------------------------------------
+    def scan(self, path: Path) -> ScanResult:
+        t0 = time.perf_counter()
+        path = Path(path)
+        try:
+            return self._scan(path, t0)
+        except Exception as exc:  # never crash the monitor: controlled error record
+            logger.exception("unexpected scan failure for %s", path)
+            return self._error_record(path, f"scan_error: {exc}", t0)
+
+    def _scan(self, path: Path, t0: float) -> ScanResult:
+        # 1. identify file
+        if not path.is_file():
+            return self._error_record(path, "not a file", t0)
+        # 2. stability is the monitor's job; scan operates on settled files
+        # 3. sha-256
+        sha256 = compute_sha256(path)
+        # 4. extract static features (validates schema/count/dtype/NaN)
+        t_extract = time.perf_counter()
+        try:
+            fv = self.extractor.extract(path)
+        except ExtractionError as exc:
+            return self._error_record(path, f"extraction_failed: {exc}", t0, sha256=sha256)
+        extraction_ms = (time.perf_counter() - t_extract) * 1000.0
+
+        # 5. validate feature schema (enforced by extractor at load + extract)
+        # 6. preprocess (bundle zero-guarded StandardScaler)
+        # 7. active local model is already loaded (never reloaded)
+        # 8. predict malware probability
+        t_infer = time.perf_counter()
+        probs = self.bundle.predict_proba(fv.features.reshape(1, -1))
+        p = float(probs[0])
+        inference_ms = (time.perf_counter() - t_infer) * 1000.0
+
+        # 9. calculate risk
+        risk_score, risk_level, verdict, action = self.risk.decide(p)
+        # 10. verdict + 11. record
+        record = DetectionRecord(
+            detection_id=uuid.uuid4().hex[:16],
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            filename=path.name,
+            filepath=str(path),
+            sha256=sha256,
+            file_type=self._file_type(path),
+            model_version=self.model_version,
+            malware_probability=p,
+            benign_probability=round(1.0 - p, 6),
+            risk_score=risk_score,
+            risk_level=risk_level,
+            verdict=verdict,
+            action=action,
+            model_algorithm=self.model_algorithm,
+            analysis_duration_ms=round((time.perf_counter() - t0) * 1000.0, 3),
+        )
+        # 12. trigger configured action
+        self._trigger_action(path, record)
+        return ScanResult(record, extraction_ms, inference_ms, record.analysis_duration_ms)
+
+    # ------------------------------------------------------------------
+    def _file_type(self, path: Path) -> str:
+        ext = path.suffix.lower()
+        try:
+            pe_info = analyze_pe_file(path)
+            if pe_info.is_pe:
+                t = classify_file_type(pe_info, path.suffix)
+                if t != "unknown":
+                    return t
+        except Exception:  # metadata is best-effort; never blocks scanning
+            pass
+        return {".dll": "pe_dll", ".sys": "pe_sys", ".exe": "pe_exe",
+                ".scr": "pe_exe", ".com": "pe_exe"}.get(ext, "pe_unknown")
+
+    def _trigger_action(self, path: Path, record: DetectionRecord) -> None:
+        if record.action != "QUARANTINE":
+            return
+        try:
+            self.quarantine_manager.quarantine(path, record)
+        except QuarantineError as exc:
+            # controlled error: the monitor keeps running, the detection is
+            # already recorded; the failure is logged with its reason
+            logger.error("quarantine failed (reason=%s): %s", exc.reason, exc.message)
+
+    def _error_record(self, path: Path, reason: str, t0: float, sha256: str = "") -> ScanResult:
+        record = DetectionRecord(
+            detection_id=uuid.uuid4().hex[:16],
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            filename=path.name,
+            filepath=str(path),
+            sha256=sha256 or "",
+            file_type="unknown",
+            model_version=self.model_version,
+            malware_probability=0.0,
+            benign_probability=None,
+            risk_score=0,
+            risk_level="",
+            verdict="ERROR",
+            action="NONE",
+            model_algorithm=self.model_algorithm,
+            analysis_duration_ms=round((time.perf_counter() - t0) * 1000.0, 3),
+        )
+        logger.error("scan error %s: %s", path, reason)
+        return ScanResult(record, 0.0, 0.0, record.analysis_duration_ms)
