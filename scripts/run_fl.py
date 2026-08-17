@@ -65,6 +65,9 @@ def main() -> None:
                         help="FedRep phase-A head adaptation epochs (personalized only)")
     parser.add_argument("--head-lr", type=float, default=None,
                         help="FedRep phase-A head learning rate (personalized only)")
+    parser.add_argument("--resource-aware", action="store_true",
+                        help="enable resource-aware FL training (Phase 12 policy "
+                             "from endpoint.resource in the config)")
     parser.add_argument("--rounds", type=int, default=None)
     parser.add_argument("--local-epochs", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
@@ -104,6 +107,9 @@ def main() -> None:
         cfg.fl.personalized_head_epochs = args.head_epochs
     if args.head_lr is not None:
         cfg.fl.personalized_head_learning_rate = args.head_lr
+    if args.resource_aware:
+        cfg.endpoint.resource.enabled = True
+        logger.info("resource-aware FL training enabled")
 
     vectorized = Path(args.vectorized)
     scaler = joblib.load(Path(args.scaler))

@@ -182,6 +182,40 @@ class HistoryConfig:
 
 
 @dataclass
+class ResourceConfig:
+    """Resource-aware FL training policy (Phase 12).
+
+    Every constraint is optional: None/False disables it and the code then
+    never applies it (missing metrics are skipped the same way, so a policy
+    works identically on machines that cannot measure a given metric). The
+    values themselves are configured in configs/default.yaml — there are no
+    hardcoded universal thresholds.
+
+    enabled: master switch; when False training is always permitted.
+    max_cpu_percent: pause training above this CPU utilization.
+    min_battery_percent: pause training below this battery level.
+    require_ac_power: pause training while running on battery.
+    idle_only: pause training while the user is active (idle time <
+        idle_min_seconds); requires an activity metric, else skipped.
+    idle_min_seconds: user-inactivity threshold for idle_only.
+    max_training_duration_sec: cancel training once a single fit has run
+        this long (0/None = unlimited).
+    min_free_memory_mb: pause training below this free RAM.
+    check_interval_sec: how often the controller re-samples resources.
+    """
+
+    enabled: bool = False
+    max_cpu_percent: Optional[float] = None
+    min_battery_percent: Optional[float] = None
+    require_ac_power: bool = False
+    idle_only: bool = False
+    idle_min_seconds: Optional[float] = None
+    max_training_duration_sec: Optional[float] = None
+    min_free_memory_mb: Optional[float] = None
+    check_interval_sec: float = 5.0
+
+
+@dataclass
 class EndpointConfig:
     """Endpoint Protection Engine configuration."""
 
@@ -191,6 +225,7 @@ class EndpointConfig:
     quarantine: QuarantineConfig = field(default_factory=QuarantineConfig)
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)
+    resource: ResourceConfig = field(default_factory=ResourceConfig)
 
 
 @dataclass

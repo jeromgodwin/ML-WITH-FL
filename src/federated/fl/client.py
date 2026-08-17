@@ -61,6 +61,7 @@ class FedAvgClient(NumPyClient):
         X_val: np.ndarray,
         y_val: np.ndarray,
         seed: int = 42,
+        controller: Optional[Any] = None,
     ):
         self.model_cfg = model_cfg
         self.X_train = X_train
@@ -68,7 +69,24 @@ class FedAvgClient(NumPyClient):
         self.X_val = X_val
         self.y_val = y_val
         self.seed = seed
+        self.controller = controller  # Phase 12 resource gate (optional)
         self.model = build_mlp(model_cfg)
+
+    # ------------------------------------------------------------------
+    def _training_gate(self) -> bool:
+        """Block until the resource policy permits training (Phase 12).
+
+        Returns False only when training was CANCELLED (the fit must stop).
+        With no controller attached, training is always permitted. The gate
+        is checked between epochs, never inside the real-time detection
+        pipeline, which does not consult the controller at all.
+        """
+        if self.controller is None:
+            return True
+        t0 = time.perf_counter()
+        allowed = self.controller.wait_until_allowed()
+        self._gate_wait_ms += (time.perf_counter() - t0) * 1000.0
+        return allowed
 
     # ------------------------------------------------------------------
     def get_parameters(self, config) -> List[np.ndarray]:
@@ -92,8 +110,14 @@ class FedAvgClient(NumPyClient):
         n = self.X_train.shape[0]
         rng = np.random.default_rng(self.seed)
         t0 = time.perf_counter()
+        self._gate_wait_ms = 0.0
         bce_terms, prox_terms, total_correct = 0.0, 0.0, 0
+        epochs_completed = 0
+        aborted = False
         for _ in range(local_epochs):
+            if not self._training_gate():
+                aborted = True
+                break
             perm = rng.permutation(n)
             for start in range(0, n, batch_size):
                 idx = perm[start:start + batch_size]
@@ -113,6 +137,7 @@ class FedAvgClient(NumPyClient):
                 optimizer.step()
                 bce_terms += float(bce.item()) * len(idx)
                 total_correct += ((torch.sigmoid(logits) >= 0.5).float() == yb).sum().item()
+            epochs_completed += 1
         fit_time_ms = (time.perf_counter() - t0) * 1000.0
 
         params = self.get_parameters({})
@@ -126,6 +151,11 @@ class FedAvgClient(NumPyClient):
             "proximal_mu": mu,
             "prox_penalty": round(prox_terms, 6),
         }
+        if self.controller is not None:
+            metrics["resource_gated"] = True
+            metrics["epochs_completed"] = epochs_completed
+            metrics["gate_wait_ms"] = round(self._gate_wait_ms, 2)
+            metrics["aborted"] = aborted
         return params, n, metrics
 
     def evaluate(self, parameters, config) -> Tuple[float, int, Dict[str, Any]]:
@@ -203,13 +233,19 @@ class PersonalizedClient(FedAvgClient):
         n = self.X_train.shape[0]
         rng = np.random.default_rng(self.seed)
         t0 = time.perf_counter()
+        self._gate_wait_ms = 0.0
 
         # Phase A: adapt the personal head to the current global body.
         for p in self.model.body.parameters():
             p.requires_grad = False
         head_opt = torch.optim.Adam(self.model.head.parameters(), lr=head_lr)
         head_loss_terms = 0.0
+        head_epochs_completed = 0
+        aborted = False
         for _ in range(head_epochs):
+            if not self._training_gate():
+                aborted = True
+                break
             perm = rng.permutation(n)
             for start in range(0, n, batch_size):
                 idx = perm[start:start + batch_size]
@@ -221,6 +257,7 @@ class PersonalizedClient(FedAvgClient):
                 loss.backward()
                 head_opt.step()
                 head_loss_terms += float(loss.item()) * len(idx)
+            head_epochs_completed += 1
 
         # Phase B: train the shared body with the head frozen.
         for p in self.model.body.parameters():
@@ -229,7 +266,11 @@ class PersonalizedClient(FedAvgClient):
             p.requires_grad = False
         body_opt = torch.optim.Adam(self.model.body.parameters(), lr=lr)
         bce_terms, total_correct = 0.0, 0
+        body_epochs_completed = 0
         for _ in range(local_epochs):
+            if not self._training_gate():
+                aborted = True
+                break
             perm = rng.permutation(n)
             for start in range(0, n, batch_size):
                 idx = perm[start:start + batch_size]
@@ -242,6 +283,7 @@ class PersonalizedClient(FedAvgClient):
                 body_opt.step()
                 bce_terms += float(loss.item()) * len(idx)
                 total_correct += ((torch.sigmoid(logits) >= 0.5).float() == yb).sum().item()
+            body_epochs_completed += 1
         for p in self.model.head.parameters():
             p.requires_grad = True
         fit_time_ms = (time.perf_counter() - t0) * 1000.0
@@ -258,6 +300,12 @@ class PersonalizedClient(FedAvgClient):
             "proximal_mu": 0.0,
             "prox_penalty": 0.0,
         }
+        if self.controller is not None:
+            metrics["resource_gated"] = True
+            metrics["head_epochs_completed"] = head_epochs_completed
+            metrics["body_epochs_completed"] = body_epochs_completed
+            metrics["gate_wait_ms"] = round(self._gate_wait_ms, 2)
+            metrics["aborted"] = aborted
         return params, n, metrics
 
     @property
@@ -271,6 +319,7 @@ def build_client_fn(
     model_cfg: MLPConfig,
     seed: int = 42,
     cid: Optional[int] = None,
+    controller: Optional[Any] = None,
 ) -> Any:
     """client_fn(cid) factory: each client materializes ONLY its own rows.
 
@@ -279,12 +328,16 @@ def build_client_fn(
     started via flwr.client.start_client all receive the SAME node id
     (gRPC-bidi has no node concept), so callers MUST pass the explicit
     partition index to keep clients on their own data.
+
+    controller: optional Phase-12 TrainingController shared by all clients;
+    the client gates each epoch through it (None = unrestricted training).
     """
 
     def client_fn(cid_str: str):
         index = int(cid) if cid is not None else int(cid_str)
         X_tr, y_tr, X_va, y_va = data.client_data(index)
-        return FedAvgClient(model_cfg, X_tr, y_tr, X_va, y_va, seed=seed).to_client()
+        return FedAvgClient(model_cfg, X_tr, y_tr, X_va, y_va, seed=seed,
+                            controller=controller).to_client()
 
     return client_fn
 
@@ -294,6 +347,7 @@ def build_personalized_client_fn(
     model_cfg: MLPConfig,
     seed: int = 42,
     cid: Optional[int] = None,
+    controller: Optional[Any] = None,
 ) -> Any:
     """client_fn(cid) factory for PersonalizedClient (Phase 11).
 
@@ -303,6 +357,8 @@ def build_personalized_client_fn(
     global RNG is reseeded, so every client builds from the same RNG state
     (all heads start identical and diverge purely through local data) and the
     result is reproducible regardless of thread scheduling.
+
+    controller: optional Phase-12 TrainingController shared by all clients.
     """
 
     def client_fn(cid_str: str):
@@ -312,7 +368,8 @@ def build_personalized_client_fn(
         with _model_build_lock:
             set_all_seeds(seed)
             client = PersonalizedClient(
-                model_cfg, X_tr, y_tr, X_va, y_va, seed=seed)
+                model_cfg, X_tr, y_tr, X_va, y_va, seed=seed,
+                controller=controller)
         return client.to_client()
 
     return client_fn

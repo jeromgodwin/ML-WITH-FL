@@ -78,3 +78,13 @@ endpoint:
     enabled: true
     history_db: "history/detections.db"
     retention_days: 0
+  resource:
+    enabled: false
+    max_cpu_percent: 80
+    min_battery_percent: 20
+    require_ac_power: false
+    idle_only: false
+    idle_min_seconds: 60
+    max_training_duration_sec: null
+    min_free_memory_mb: 512
+    check_interval_sec: 5.0

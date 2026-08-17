@@ -28,6 +28,7 @@ import math
 import socket
 import threading
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -261,6 +262,7 @@ def run_fl_experiment(
     output_dir: Optional[Path] = None,
     seed: Optional[int] = None,
     grpc_max_message_length: int = DEFAULT_MAX_MESSAGE_LENGTH,
+    controller: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Run one FL experiment on a saved Phase-4 partition; return results.
 
@@ -270,6 +272,11 @@ def run_fl_experiment(
     strategy differs, so the results are directly comparable. For
     ``personalized`` only the shared body crosses the wire and the global
     evaluation uses a probe head trained on a balanced sample.
+
+    controller: optional Phase-12 TrainingController; when None and
+    ``cfg.endpoint.resource.enabled`` is set, one is built from the config.
+    The controller gates every client's local epochs — real-time detection
+    never consults it.
     """
     algorithm = cfg.fl.algorithm
     if algorithm not in ("fedavg", "fedprox", "personalized"):
@@ -339,6 +346,16 @@ def run_fl_experiment(
     port = _free_port()
     address = f"127.0.0.1:{port}"
 
+    # Phase 12: resource-aware training gate (one controller, shared by all
+    # client threads; built from config unless an explicit one is injected).
+    if controller is None and cfg.endpoint.resource.enabled:
+        from src.endpoint.resource import create_controller_from_config
+        controller = create_controller_from_config(cfg.endpoint.resource)
+        logger.info("resource-aware FL enabled: %s",
+                    cfg.endpoint.resource)
+    if controller is not None:
+        controller.request_start()
+
     server_config = ServerConfig(num_rounds=cfg.fl.num_rounds)
     server_thread = threading.Thread(
         target=_run_grpc_server,
@@ -361,7 +378,8 @@ def run_fl_experiment(
         # bind the worker to its partition index: in-process start_client
         # workers all receive the same node id, so the cid string is unreliable
         builder = build_personalized_client_fn if personalized else build_client_fn
-        client_fn = builder(data, model_cfg, seed=seed, cid=cid)
+        client_fn = builder(data, model_cfg, seed=seed, cid=cid,
+                            controller=controller)
         t = threading.Thread(
             target=start_client,
             kwargs=dict(server_address=address, client_fn=client_fn,
@@ -373,6 +391,8 @@ def run_fl_experiment(
         client_threads.append(t)
 
     server_thread.join()
+    if controller is not None:
+        controller.finish()
     training_time_s = time.perf_counter() - t_run0
 
     summary = strategy.summary()
@@ -433,6 +453,13 @@ def run_fl_experiment(
         "round_time_s_mean": round(
             summary["totals"]["total_round_time_ms"] / max(len(summary["rounds"]), 1) / 1000.0, 3),
     }
+
+    if controller is not None:
+        results["resource"] = {
+            "enabled": True,
+            "policy": asdict(cfg.endpoint.resource),
+            "controller": controller.status(),
+        }
 
     if personalized:
         head_model = build_personalized_mlp(model_cfg)
