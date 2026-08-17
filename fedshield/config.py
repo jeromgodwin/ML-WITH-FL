@@ -187,7 +187,7 @@ class ResourceConfig:
 
     Every constraint is optional: None/False disables it and the code then
     never applies it (missing metrics are skipped the same way, so a policy
-    works identically on machines that cannot measure a given metric). The
+    works identically on machines that cannot measure a given signal). The
     values themselves are configured in configs/default.yaml — there are no
     hardcoded universal thresholds.
 
@@ -216,6 +216,42 @@ class ResourceConfig:
 
 
 @dataclass
+class DriftConfig:
+    """Concept drift detection and adaptive retraining (Phase 13).
+
+    All thresholds and windows are configurable in configs/default.yaml —
+    no hardcoded universal defaults.
+
+    enabled: master switch for adaptive retraining workflow.
+    timestamp_feature: name of the feature column used for temporal splits.
+    reference_frac: fraction of data used as the reference (older) distribution
+        for drift detection; the remainder forms the streaming "current" data.
+    psi_feature_subset: optional list of feature indices to monitor; None = all.
+    psi_bins: number of bins for Population Stability Index (PSI) calculation.
+    psi_suspect_threshold: PSI >= this → DRIFT_SUSPECTED.
+    psi_detected_threshold: PSI >= this → DRIFT_DETECTED.
+    cooldown_hours: minimum hours between retraining events.
+    min_new_samples: minimum new samples required to trigger retraining.
+    max_retraining_rounds: FL rounds for adaptive retraining runs.
+    max_frequency_per_day: maximum retraining events per 24h.
+    validation_frac: fraction of current data reserved for candidate validation.
+    """
+
+    enabled: bool = False
+    timestamp_feature: str = "header_timestamp"
+    reference_frac: float = 0.5
+    psi_feature_subset: Optional[list[int]] = None
+    psi_bins: int = 10
+    psi_suspect_threshold: float = 0.1
+    psi_detected_threshold: float = 0.2
+    cooldown_hours: float = 24.0
+    min_new_samples: int = 10000
+    max_retraining_rounds: int = 5
+    max_frequency_per_day: int = 1
+    validation_frac: float = 0.2
+
+
+@dataclass
 class EndpointConfig:
     """Endpoint Protection Engine configuration."""
 
@@ -226,6 +262,7 @@ class EndpointConfig:
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)
     resource: ResourceConfig = field(default_factory=ResourceConfig)
+    drift: DriftConfig = field(default_factory=DriftConfig)
 
 
 @dataclass

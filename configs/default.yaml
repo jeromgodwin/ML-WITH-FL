@@ -88,3 +88,16 @@ endpoint:
     max_training_duration_sec: null
     min_free_memory_mb: 512
     check_interval_sec: 5.0
+  drift:
+    enabled: false
+    timestamp_feature: "header_timestamp"
+    reference_frac: 0.5
+    psi_feature_subset: null
+    psi_bins: 10
+    psi_suspect_threshold: 0.1
+    psi_detected_threshold: 0.2
+    cooldown_hours: 24.0
+    min_new_samples: 10000
+    max_retraining_rounds: 5
+    max_frequency_per_day: 1
+    validation_frac: 0.2
