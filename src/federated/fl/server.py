@@ -46,7 +46,9 @@ from fedshield.logging_setup import get_logger
 from src.federated.evaluation.metrics import predict_proba_chunked
 from src.federated.fl.client import build_client_fn, build_personalized_client_fn
 from src.federated.fl.dataset import PartitionClientData
-from src.federated.fl.strategy import FedAvgTracked, FedProxTracked, PersonalizedTracked
+from src.federated.fl.strategy import (
+    FedAvgTracked, FedProxTracked, PersonalizedTracked, DefendedTracked,
+)
 from src.federated.models.mlp import (
     MLPConfig, build_mlp, build_personalized_mlp,
 )
@@ -61,6 +63,49 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return int(s.getsockname()[1])
+
+
+def _server_validation_set(
+    data: PartitionClientData,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    frac: float,
+    seed: int,
+    max_rows: int = 50_000,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Controlled server-side validation set: labeled rows never seen by clients.
+
+    The partition strictly consumes its pool, so the validation set is drawn
+    from labeled ``X_train`` rows OUTSIDE the pool. Deterministic (seeded), so
+    every round and every defense configuration validate on the SAME rows.
+    """
+    pool = set(np.asarray(data.pool, dtype=np.int64).tolist())
+    held_out = np.asarray([i for i in range(len(y_train)) if i not in pool],
+                          dtype=np.int64)
+    if len(held_out) == 0:
+        raise ValueError(
+            "no held-out rows available for the server validation set "
+            "(partition consumes the entire training matrix)")
+    n_want = min(int(frac * len(pool)), len(held_out), max_rows)
+    # Stratify by label so the controlled validation set always contains both
+    # classes (a single-class set breaks binary F1 and is not a meaningful
+    # candidate-vs-trusted comparison).
+    pos = held_out[np.asarray(y_train[held_out]) == 1]
+    neg = held_out[np.asarray(y_train[held_out]) == 0]
+    if len(pos) == 0 or len(neg) == 0:
+        raise ValueError(
+            "held-out rows do not contain both classes; cannot build a "
+            "stratified server validation set")
+    rng = np.random.default_rng(seed)
+    half = n_want // 2
+    k_pos = min(half, len(pos))
+    k_neg = min(half, len(neg))
+    sel = np.concatenate([
+        rng.choice(pos, k_pos, replace=False),
+        rng.choice(neg, k_neg, replace=False),
+    ])
+    return (np.asarray(X_train[sel], dtype=np.float32),
+            np.asarray(y_train[sel], dtype=np.int64))
 
 
 def _run_grpc_server(address: str, config: ServerConfig, strategy, max_message_length: int):
@@ -273,6 +318,11 @@ def run_fl_experiment(
     ``personalized`` only the shared body crosses the wire and the global
     evaluation uses a probe head trained on a balanced sample.
 
+    Phase 14: when ``cfg.defense.mode`` is not "none" or ``cfg.attack.enabled``
+    is set, the run uses the DefendedTracked strategy (clipping / anomaly
+    detection / model validation / robust aggregation) and clients simulate
+    the configured abnormal updates (synthetic only — no real malware).
+
     controller: optional Phase-12 TrainingController; when None and
     ``cfg.endpoint.resource.enabled`` is set, one is built from the config.
     The controller gates every client's local epochs — real-time detection
@@ -339,9 +389,36 @@ def run_fl_experiment(
             **strategy_kwargs)
     else:
         strategy = FedAvgTracked(**strategy_kwargs)
-    logger.info("%s experiment: %s strategy, %d rounds, %d clients, proximal_mu=%s%s",
+
+    # Phase 14: simulated attack + server-side defenses.
+    from src.federated.defense.attack import AttackSpec
+    from src.federated.defense.validation import ValidationGate
+    attack_spec = AttackSpec.from_config(cfg.attack)
+    validation_gate = None
+    defense_active = cfg.defense.mode != "none" or attack_spec.is_malicious
+    if defense_active:
+        if cfg.defense.mode == "validation":
+            X_val, y_val = _server_validation_set(
+                data, X_train, y_train, cfg.defense.validation_frac, seed)
+            validation_gate = ValidationGate(
+                X_val, y_val, scale_inv, model_cfg,
+                tolerance=cfg.defense.validation_tolerance)
+            logger.info("validation gate: %d held-out rows (never in any client)",
+                        len(X_val))
+        strategy = DefendedTracked(
+            defense_mode=cfg.defense.mode,
+            clip_norm=cfg.defense.clip_norm,
+            anomaly_suspect_mult=cfg.defense.anomaly_suspect_mult,
+            anomaly_detect_mult=cfg.defense.anomaly_detect_mult,
+            exclude_highly_anomalous=cfg.defense.exclude_highly_anomalous,
+            robust_trim_frac=cfg.defense.robust_trim_frac,
+            validation_gate=validation_gate,
+            **strategy_kwargs)
+    logger.info("%s experiment: %s strategy, %d rounds, %d clients, proximal_mu=%s%s%s",
                 algorithm, data.strategy(), cfg.fl.num_rounds, data.n_clients,
-                proximal_mu, " (personalized head)" if personalized else "")
+                proximal_mu, " (personalized head)" if personalized else "",
+                f" | defense={cfg.defense.mode} attack={attack_spec.attack_type}"
+                if defense_active else "")
 
     port = _free_port()
     address = f"127.0.0.1:{port}"
@@ -379,18 +456,24 @@ def run_fl_experiment(
         # workers all receive the same node id, so the cid string is unreliable
         builder = build_personalized_client_fn if personalized else build_client_fn
         client_fn = builder(data, model_cfg, seed=seed, cid=cid,
-                            controller=controller)
+                            controller=controller,
+                            attack_spec=attack_spec if defense_active else None)
         t = threading.Thread(
             target=start_client,
             kwargs=dict(server_address=address, client_fn=client_fn,
                         grpc_max_message_length=grpc_max_message_length,
-                        max_retries=10, max_wait_time=2.0),
+                        max_retries=5, max_wait_time=1.0),
             daemon=True,
         )
         t.start()
         client_threads.append(t)
 
     server_thread.join()
+    # Phase 14: join the client threads after the server stops so their
+    # local data is released before the next experiment (sequential cells
+    # otherwise accumulate several GB per run and OOM on this machine).
+    for t in client_threads:
+        t.join(timeout=20)
     if controller is not None:
         controller.finish()
     training_time_s = time.perf_counter() - t_run0
@@ -444,6 +527,16 @@ def run_fl_experiment(
             "worst_client_f1": r.get("worst_client_f1"),
             "client_f1_variance": r.get("client_f1_variance"),
             "global_eval": r.get("global_eval"),
+            "defense": {
+                "n_clients_aggregated": r.get("n_clients_aggregated"),
+                "n_excluded_anomalous": r.get("n_excluded_anomalous", 0),
+                "excluded_cids": r.get("excluded_cids", []),
+                "update_norms": r.get("update_norms"),
+                "anomaly": r.get("anomaly"),
+                "clipping": r.get("clipping"),
+                "validation": r.get("validation"),
+                "global_update_norm": r.get("global_update_norm"),
+            },
         } for r in summary["rounds"]],
         "per_client_metrics": [
             {"round": r["round"], "clients": r.get("per_client_metrics")}
@@ -460,6 +553,14 @@ def run_fl_experiment(
             "policy": asdict(cfg.endpoint.resource),
             "controller": controller.status(),
         }
+
+    if defense_active:
+        from src.federated.defense.attack import attack_report
+        from src.federated.defense.attack import is_malicious_cid
+        malicious_cids = [c for c in range(data.n_clients)
+                          if is_malicious_cid(c, attack_spec)]
+        results["attack"] = attack_report(attack_spec, malicious_cids)
+        results["defense"] = strategy.summarize_defense()
 
     if personalized:
         head_model = build_personalized_mlp(model_cfg)

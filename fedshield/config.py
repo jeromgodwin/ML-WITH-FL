@@ -278,6 +278,67 @@ class LoggingConfig:
 
 
 @dataclass
+class AttackConfig:
+    """Controlled malicious-client simulation (Phase 14).
+
+    Produces intentionally abnormal model updates ONLY — no real malware,
+    no operational attack tooling. Purpose is measurement: attack impact,
+    detection capability, mitigation capability.
+
+    enabled: master switch; when False all clients are honest.
+    attack_type: none | label_flip | scaled_update | replacement.
+        label_flip: malicious clients train on flipped labels (data-level).
+        scaled_update: malicious clients scale their honest update by
+            update_scale (abnormal-magnitude update).
+        replacement: malicious clients return a large random parameter
+            vector unrelated to local training (out-of-distribution update).
+    n_malicious: number of malicious clients (first n of the partition).
+    update_scale: magnitude multiplier for scaled_update.
+    flip_frac: fraction of the malicious client's labels flipped.
+    """
+
+    enabled: bool = False
+    attack_type: str = "none"
+    n_malicious: int = 2
+    update_scale: float = 20.0
+    flip_frac: float = 1.0
+    seed: int = 42
+
+
+@dataclass
+class DefenseConfig:
+    """Server-side poisoning defenses (Phase 14).
+
+    mode: none | clipping | anomaly | validation | robust_median |
+        robust_trimmed. All metrics are recorded for every mode, so a
+        comparison run can report detection/FP rates even for the baseline.
+
+    clip_norm: maximum L2 norm of a client's parameter update (before
+        aggregation). Updates above the threshold are scaled down to it.
+        None = clipping disabled (even in clipping mode).
+    anomaly_suspect_mult: per-client anomaly score >= this multiple of the
+        robust scale (MAD of peer scores) → SUSPICIOUS.
+    anomaly_detect_mult: score >= this multiple → HIGHLY_ANOMALOUS.
+    exclude_highly_anomalous: drop HIGHLY_ANOMALOUS clients from the
+        aggregation when anomaly detection is active.
+    robust_trim_frac: fraction trimmed per side in robust_trimmed mode.
+    validation_frac: fraction of the training rows NOT used by any client
+        held out by the server as the controlled validation set.
+    validation_tolerance: candidate F1 below (trusted F1 - tolerance) is
+        REJECTED (previous trusted model retained).
+    """
+
+    mode: str = "none"
+    clip_norm: Optional[float] = None
+    anomaly_suspect_mult: float = 3.0
+    anomaly_detect_mult: float = 6.0
+    exclude_highly_anomalous: bool = True
+    robust_trim_frac: float = 0.2
+    validation_frac: float = 0.05
+    validation_tolerance: float = 0.01
+
+
+@dataclass
 class ExperimentConfig:
     """Root configuration for one experiment run."""
 
@@ -290,6 +351,8 @@ class ExperimentConfig:
     train: TrainConfig = field(default_factory=TrainConfig)
     fl: FlConfig = field(default_factory=FlConfig)
     endpoint: EndpointConfig = field(default_factory=EndpointConfig)
+    attack: AttackConfig = field(default_factory=AttackConfig)
+    defense: DefenseConfig = field(default_factory=DefenseConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":

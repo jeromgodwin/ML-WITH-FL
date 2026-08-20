@@ -216,3 +216,206 @@ class PersonalizedTracked(FedAvgTracked):
             return cfg
 
         self.on_fit_config_fn = on_fit_config_fn
+
+
+class DefendedTracked(FedAvgTracked):
+    """FedAvg with configurable server-side poisoning defenses (Phase 14).
+
+    Defends the round aggregation against simulated malicious updates:
+
+    - clipping: each client's parameter UPDATE (returned - received) is
+      clipped to a maximum L2 norm before aggregation.
+    - anomaly detection: per-client updates are scored (magnitude, deviation
+      from peer updates, distance from the reference update); HIGHLY_ANOMALOUS
+      clients are excluded from the aggregation.
+    - model validation: the candidate aggregated model is validated on a
+      controlled held-out set; if it degrades unexpectedly vs the currently
+      trusted model, it is REJECTED and the previous trusted model is
+      retained.
+    - robust aggregation: coordinate-wise median or trimmed mean over client
+      updates (experimental).
+
+    Every mode still records the per-client update norms and anomaly
+    classifications, so a comparison run reports detection/FP rates for the
+    baseline too. The strategy NEVER claims complete poisoning detection.
+    """
+
+    def __init__(
+        self,
+        defense_mode: str = "none",
+        clip_norm: Optional[float] = None,
+        anomaly_suspect_mult: float = 3.0,
+        anomaly_detect_mult: float = 6.0,
+        exclude_highly_anomalous: bool = True,
+        robust_trim_frac: float = 0.2,
+        validation_gate: Optional[Any] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        if defense_mode not in ("none", "clipping", "anomaly", "validation",
+                                "robust_median", "robust_trimmed"):
+            raise ValueError(f"unsupported defense mode: {defense_mode!r}")
+        self.defense_mode = defense_mode
+        self.clip_norm = clip_norm
+        self.anomaly_suspect_mult = anomaly_suspect_mult
+        self.anomaly_detect_mult = anomaly_detect_mult
+        self.exclude_highly_anomalous = exclude_highly_anomalous
+        self.robust_trim_frac = robust_trim_frac
+        self.validation_gate = validation_gate
+        from flwr.common import parameters_to_ndarrays
+        self._global = parameters_to_ndarrays(self.initial_parameters)
+        self._reference_norms: List[float] = []
+        self._anomaly: Optional[Any] = None
+        self._clipper: Optional[Any] = None
+        from src.federated.defense.anomaly import UpdateAnomalyDetector
+        from src.federated.defense.clipping import UpdateClipper
+        self._anomaly = UpdateAnomalyDetector(
+            suspect_mult=anomaly_suspect_mult, detect_mult=anomaly_detect_mult)
+        self._clipper = UpdateClipper(max_norm=clip_norm)
+        self.defense_summary: Dict[str, Any] = {}
+
+    # ------------------------------------------------------------------
+    def aggregate_fit(self, server_round, results, failures):
+        if not results:
+            return None, {}
+        t0 = time.perf_counter()
+        from flwr.common import parameters_to_ndarrays
+
+        # Per-client parameter arrays + update vectors vs the last global.
+        # The partition index (0..n-1) reported by each client is used as the
+        # stable id; Flower's generated cid (random hex per connection) is only
+        # a fallback.
+        client_params = [
+            (str(fitres.metrics.get("partition_cid", cid.cid)),
+             parameters_to_ndarrays(fitres.parameters),
+             int(fitres.num_examples), dict(fitres.metrics or {}))
+            for cid, fitres in results
+        ]
+        layer_sizes = [int(g.size) for g in self._global]
+        layer_bounds = np.cumsum([0] + layer_sizes)
+        update_vectors = []
+        for cid_str, params, n, _m in client_params:
+            upd = [(np.asarray(p, dtype=np.float32) - g)
+                   for p, g in zip(params, self._global)]
+            update_vectors.append((cid_str, np.concatenate(
+                [u.reshape(-1) for u in upd])))
+
+        # Clipping records norm before/after for every update.
+        clipped_vectors = []
+        for cid_str, vec in update_vectors:
+            c = self._clipper.clip(vec)
+            clipped_vectors.append((cid_str, c))
+
+        # Anomaly detection (always measured, applied when configured).
+        reference = (float(np.median(self._reference_norms))
+                     if self._reference_norms else None)
+        anomaly_records = self._anomaly.score_and_classify(
+            clipped_vectors, reference_norm=reference)
+
+        # Select aggregation participants.
+        from src.federated.defense.anomaly import AnomalyClass
+        exclude = set()
+        if self.defense_mode == "anomaly" and self.exclude_highly_anomalous:
+            exclude = {r.cid for r in anomaly_records
+                       if r.classification == AnomalyClass.HIGHLY_ANOMALOUS}
+            if exclude:
+                logger.warning("round %d: excluding %d HIGHLY_ANOMALOUS client(s): %s",
+                               server_round, len(exclude), sorted(exclude))
+
+        # Aggregate updates (weighted mean / robust), then add to global.
+        chosen = [(cid_str, v, n) for (cid_str, v), (_, _n, n, _m)
+                  in zip(clipped_vectors, client_params)
+                  if cid_str not in exclude]
+        if not chosen:
+            logger.warning("round %d: all clients excluded; keeping previous model",
+                           server_round)
+            aggregated = list(self._global)
+            agg_update = np.zeros_like(update_vectors[0][1])
+        else:
+            if self.defense_mode == "robust_median":
+                from src.federated.defense.robust import coordinate_wise_median
+                agg_update = coordinate_wise_median([v for _, v, _ in chosen])
+            elif self.defense_mode == "robust_trimmed":
+                from src.federated.defense.robust import trimmed_mean
+                agg_update = trimmed_mean([v for _, v, _ in chosen],
+                                          trim_frac=self.robust_trim_frac)
+            else:
+                total = sum(n for _, _, n in chosen)
+                weights = np.array([n / total for _, _, n in chosen], dtype=float)
+                stack = np.stack([v for _, v, _ in chosen], axis=0)
+                agg_update = (stack.T @ weights).astype(np.float32)
+            agg_layers = [agg_update[lb:le].reshape(self._global[i].shape)
+                          for i, (lb, le) in enumerate(
+                              zip(layer_bounds[:-1], layer_bounds[1:]))]
+            aggregated = [np.asarray(g, dtype=np.float32) + a
+                          for g, a in zip(self._global, agg_layers)]
+
+        # Model validation gate: accept / flag / reject the candidate.
+        validation_record = None
+        if self.validation_gate is not None:
+            validation_record = self.validation_gate.validate(
+                server_round, aggregated)
+            if validation_record.decision.value == "REJECT":
+                aggregated = [np.asarray(p, dtype=np.float32).copy()
+                              for p in self.validation_gate.trusted_parameters()]
+                agg_update = np.zeros_like(agg_update)
+        self._global = [np.asarray(p, dtype=np.float32) for p in aggregated]
+        self._reference_norms.append(float(np.linalg.norm(agg_update)))
+
+        round_time_ms = (time.perf_counter() - t0) * 1000.0
+        upload = sum(int(fitres.metrics.get("upload_bytes", 0))
+                     for _, fitres in results)
+        download = sum(int(fitres.metrics.get("download_bytes", 0))
+                       for _, fitres in results)
+        record = {
+            "round": server_round,
+            "round_time_ms": round(round_time_ms, 3),
+            "n_clients_fit": len(results),
+            "n_failures": len(failures),
+            "n_clients_aggregated": len(chosen),
+            "n_excluded_anomalous": len(exclude),
+            "excluded_cids": sorted(exclude),
+            "download_bytes": download,
+            "upload_bytes": upload,
+            "bytes_this_round": upload + download,
+            "fit_metrics": self._aggregate_fit_metrics(
+                [(n, m) for _, _, n, m in client_params]),
+            "update_norms": {cid: round(float(np.linalg.norm(v)), 6)
+                             for cid, v in update_vectors},
+            "anomaly": [r.to_dict() for r in anomaly_records],
+            "clipping": [r.to_dict() for r in self._clipper.records[-len(results):]],
+            "global_update_norm": round(float(np.linalg.norm(agg_update)), 6),
+            "validation": None if validation_record is None
+            else validation_record.to_dict(),
+        }
+        self.rounds.append(record)
+        logger.info("round %d: %d clients fit, %d aggregated in %.1f ms (%s, %d bytes)",
+                    server_round, len(results), len(chosen), round_time_ms,
+                    self.defense_mode, upload + download)
+
+        from flwr.common import ndarrays_to_parameters
+        return ndarrays_to_parameters(aggregated), record["fit_metrics"]
+
+    # ------------------------------------------------------------------
+    def summarize_defense(self) -> Dict[str, Any]:
+        """Defense statistics across all rounds."""
+        anomaly = self._anomaly.summary() if self._anomaly else {"n_updates": 0}
+        clipping = self._clipper.summary() if self._clipper else {"n_updates": 0}
+        validation = (self.validation_gate.summary()
+                      if self.validation_gate is not None else None)
+        n_flagged = 0
+        for r in self.rounds:
+            n_flagged += sum(1 for a in r.get("anomaly", [])
+                             if a["classification"] != "NORMAL")
+        total = sum(r.get("n_clients_fit", 0) for r in self.rounds)
+        self.defense_summary = {
+            "defense_mode": self.defense_mode,
+            "total_client_updates": total,
+            "anomaly": anomaly,
+            "clipping": clipping,
+            "validation": validation,
+            "updates_flagged_non_normal": n_flagged,
+            "updates_flagged_rate": round(n_flagged / total, 6) if total else 0.0,
+            "n_rounds": len(self.rounds),
+        }
+        return self.defense_summary

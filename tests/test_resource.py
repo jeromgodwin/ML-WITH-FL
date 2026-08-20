@@ -420,10 +420,12 @@ def test_client_fit_aborts_when_training_cancelled():
     ctl.request_start()
     client = _tiny_client(controller=ctl)
 
-    def cancel_soon():
-        time.sleep(0.02)
-        ctl.cancel("user")
-    threading.Thread(target=cancel_soon, daemon=True).start()
+    # Deterministic: pause blocks the gate, so the cancel always lands while
+    # the client is waiting at the epoch gate (never after training finishes).
+    ctl.pause("manual")
+    threading.Thread(
+        target=lambda: (time.sleep(0.05), ctl.cancel("user")),
+        daemon=True).start()
 
     params, n, metrics = client.fit(
         client.get_parameters({}), {"local_epochs": 10, "lr": 1e-3})

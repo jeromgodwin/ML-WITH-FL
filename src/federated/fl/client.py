@@ -33,6 +33,11 @@ import torch.nn as nn
 from flwr.client import NumPyClient
 
 from src.federated.data.partition import ClientPartitionConfig  # noqa: F401
+from src.federated.defense.attack import (
+    apply_attack,
+    flip_labels,
+    is_malicious_cid,
+)
 from src.federated.evaluation.metrics import compute_metrics
 from src.federated.fl.dataset import PartitionClientData
 from src.federated.models.mlp import (
@@ -62,6 +67,8 @@ class FedAvgClient(NumPyClient):
         y_val: np.ndarray,
         seed: int = 42,
         controller: Optional[Any] = None,
+        cid: int = 0,
+        attack_spec: Optional[Any] = None,
     ):
         self.model_cfg = model_cfg
         self.X_train = X_train
@@ -70,6 +77,8 @@ class FedAvgClient(NumPyClient):
         self.y_val = y_val
         self.seed = seed
         self.controller = controller  # Phase 12 resource gate (optional)
+        self.cid = cid
+        self.attack_spec = attack_spec  # Phase 14 simulated attack (optional)
         self.model = build_mlp(model_cfg)
 
     # ------------------------------------------------------------------
@@ -99,6 +108,15 @@ class FedAvgClient(NumPyClient):
         # never updated during local training. mu=0 makes the term vanish.
         w_global = [p.detach().clone() for p in self.model.parameters()]
         mu = float(config.get("proximal_mu", 0.0))
+
+        # Phase 14 simulated attack (label_flip alters local training data).
+        y_train = self.y_train
+        attack_type = "none"
+        if self.attack_spec is not None and is_malicious_cid(self.cid, self.attack_spec):
+            attack_type = self.attack_spec.attack_type
+            if attack_type == "label_flip":
+                y_train = flip_labels(y_train, self.attack_spec.flip_frac,
+                                      self.attack_spec.seed + self.cid)
         self.model.train()
         torch.manual_seed(self.seed + int(config.get("server_round", 0)) * 1000)
 
@@ -122,7 +140,7 @@ class FedAvgClient(NumPyClient):
             for start in range(0, n, batch_size):
                 idx = perm[start:start + batch_size]
                 xb = torch.from_numpy(self.X_train[idx])
-                yb = torch.from_numpy(self.y_train[idx]).float()
+                yb = torch.from_numpy(y_train[idx]).float()
                 optimizer.zero_grad()
                 logits = self.model(xb).ravel()
                 bce = nn.functional.binary_cross_entropy_with_logits(logits, yb)
@@ -141,6 +159,10 @@ class FedAvgClient(NumPyClient):
         fit_time_ms = (time.perf_counter() - t0) * 1000.0
 
         params = self.get_parameters({})
+        # Phase 14 simulated attack (scaled_update / replacement) transforms
+        # the returned parameters after honest training.
+        if self.attack_spec is not None and is_malicious_cid(self.cid, self.attack_spec):
+            params = apply_attack(params, list(parameters), self.cid, self.attack_spec)
         upload_bytes = serialize_bytes(params)
         metrics = {
             "train_loss": round(bce_terms / n, 6),
@@ -150,7 +172,10 @@ class FedAvgClient(NumPyClient):
             "upload_bytes": upload_bytes,
             "proximal_mu": mu,
             "prox_penalty": round(prox_terms, 6),
+            "partition_cid": self.cid,
         }
+        if self.attack_spec is not None and is_malicious_cid(self.cid, self.attack_spec):
+            metrics["simulated_attack"] = attack_type
         if self.controller is not None:
             metrics["resource_gated"] = True
             metrics["epochs_completed"] = epochs_completed
@@ -320,6 +345,7 @@ def build_client_fn(
     seed: int = 42,
     cid: Optional[int] = None,
     controller: Optional[Any] = None,
+    attack_spec: Optional[Any] = None,
 ) -> Any:
     """client_fn(cid) factory: each client materializes ONLY its own rows.
 
@@ -331,13 +357,17 @@ def build_client_fn(
 
     controller: optional Phase-12 TrainingController shared by all clients;
     the client gates each epoch through it (None = unrestricted training).
+
+    attack_spec: optional Phase-14 AttackSpec; the first ``n_malicious``
+    clients simulate the configured abnormal-update attack (synthetic only).
     """
 
     def client_fn(cid_str: str):
         index = int(cid) if cid is not None else int(cid_str)
         X_tr, y_tr, X_va, y_va = data.client_data(index)
         return FedAvgClient(model_cfg, X_tr, y_tr, X_va, y_va, seed=seed,
-                            controller=controller).to_client()
+                            controller=controller, cid=index,
+                            attack_spec=attack_spec).to_client()
 
     return client_fn
 
@@ -348,6 +378,7 @@ def build_personalized_client_fn(
     seed: int = 42,
     cid: Optional[int] = None,
     controller: Optional[Any] = None,
+    attack_spec: Optional[Any] = None,
 ) -> Any:
     """client_fn(cid) factory for PersonalizedClient (Phase 11).
 
@@ -359,6 +390,7 @@ def build_personalized_client_fn(
     result is reproducible regardless of thread scheduling.
 
     controller: optional Phase-12 TrainingController shared by all clients.
+    attack_spec: optional Phase-14 AttackSpec (synthetic abnormal updates).
     """
 
     def client_fn(cid_str: str):
@@ -369,7 +401,7 @@ def build_personalized_client_fn(
             set_all_seeds(seed)
             client = PersonalizedClient(
                 model_cfg, X_tr, y_tr, X_va, y_va, seed=seed,
-                controller=controller)
+                controller=controller, cid=index, attack_spec=attack_spec)
         return client.to_client()
 
     return client_fn
