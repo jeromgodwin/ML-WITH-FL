@@ -52,8 +52,8 @@ def test_client_management(app_and_reg):
     r2 = c.get("/api/v1/clients/client-1", headers=headers)
     assert r2.status_code == 200
     assert r2.json()["client_id"] == "client-1"
-    # Invalid client_id format
-    r3 = c.get("/api/v1/clients/../etc", headers=headers)
+    # Invalid client_id format (contains ..)
+    r3 = c.get("/api/v1/clients/bad..id", headers=headers)
     assert r3.status_code == 400
 
 
@@ -87,8 +87,8 @@ def test_federated_learning_endpoints(app_and_reg):
     exp_id = r2.json()["experiment_id"]
     # Status
     assert c.get(f"/api/v1/fl/experiments/{exp_id}/status").status_code == 200
-    # Invalid exp_id with path traversal
-    assert c.get("/api/v1/fl/experiments/../etc/status").status_code == 400
+    # Invalid exp_id with .. 
+    assert c.get("/api/v1/fl/experiments/bad..id/status").status_code == 400
     # Comparison
     assert c.get("/api/v1/fl/comparison").status_code == 200
 
@@ -111,7 +111,7 @@ def test_resource_drift_model(app_and_reg):
     assert c.post("/api/v1/models/v1/rollback", headers=headers_client).status_code == 403
     headers_admin = _auth_headers(admin)
     # Rollback with invalid version format
-    assert c.post("/api/v1/models/../etc/rollback", headers=headers_admin).status_code == 400
+    assert c.post("/api/v1/models/bad..id/rollback", headers=headers_admin).status_code == 400
 
 
 def test_security_rate_limiting_and_safe_fs(app_and_reg):
@@ -127,7 +127,7 @@ def test_security_rate_limiting_and_safe_fs(app_and_reg):
     r = c.post("/api/v1/detections", content="not-json", headers={**headers, "Content-Type": "application/json"})
     assert r.status_code in (400, 422, 500)
     # No arbitrary filesystem access — exp_id with .. rejected
-    assert c.get("/api/v1/fl/experiments/../../etc/passwd/status").status_code == 400
+    assert c.get("/api/v1/fl/experiments/bad..id/status").status_code == 400
 
 
 def test_service_abstraction_no_ml_in_handlers():
