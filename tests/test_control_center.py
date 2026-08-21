@@ -15,14 +15,12 @@ from backend.app import create_app
 def app_and_reg(tmp_path):
     cfg = ServerNetworkConfig(host="127.0.0.1", port=8000, secure=False)
     reg_dir = tmp_path / "reg"
-    app = create_app(cfg, model_registry_dir=reg_dir / "models", client_registry_dir=reg_dir / "clients")
-    # Provision admin and client
-    # Access the app's internal registries via the service layer's client_registry
-    # We provision directly via ClientRegistry for test
+    # Provision before app creation so the app loads them
     from src.federated.network.auth import ClientRegistry as CR
     cr = CR(reg_dir / "clients")
     admin = cr.provision_client("admin-1", role="admin")
     client = cr.provision_client("client-1", role="client")
+    app = create_app(cfg, model_registry_dir=reg_dir / "models", client_registry_dir=reg_dir / "clients")
     return app, admin, client, reg_dir
 
 
