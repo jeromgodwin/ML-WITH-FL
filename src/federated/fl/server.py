@@ -438,8 +438,15 @@ def run_fl_experiment(
                 f" | privacy={privacy_spec.strength_label()} sigma={privacy_spec.sigma:.3f}"
                 if privacy_active else "")
 
+    # Phase 19: configurable server address (never hardcode localhost in config)
+    # For in-process simulation, bind to cfg.server.host if it is localhost/LAN,
+    # otherwise use 127.0.0.1 for local sim; internet deployment uses cfg.server.host via separate server process
+    host = getattr(cfg, "server", None).host if hasattr(cfg, "server") and getattr(cfg.server, "host", None) else "127.0.0.1"
+    # For local simulation, always bind to 127.0.0.1 if host is not 0.0.0.0/LAN — keep Internet host for URL construction only
+    bind_host = "127.0.0.1" if host in ("127.0.0.1", "localhost") else "0.0.0.0"
     port = _free_port()
-    address = f"127.0.0.1:{port}"
+    address = f"{bind_host}:{port}"
+    external_address = f"{host}:{port}" if host not in ("0.0.0.0",) else address
 
     # Phase 12: resource-aware training gate (one controller, shared by all
     # client threads; built from config unless an explicit one is injected).
@@ -463,7 +470,7 @@ def run_fl_experiment(
     deadline = time.time() + 30
     while time.time() < deadline:
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            with socket.create_connection((bind_host if bind_host != "0.0.0.0" else "127.0.0.1", port), timeout=0.5):
                 break
         except OSError:
             time.sleep(0.2)
