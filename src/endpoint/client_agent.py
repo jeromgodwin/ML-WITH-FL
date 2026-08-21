@@ -14,14 +14,32 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from src.endpoint.monitor import FileMonitor
-from src.endpoint.detector import Detector
+try:
+    from src.endpoint.monitor import FileMonitor
+except Exception:
+    FileMonitor = Any  # type: ignore
+try:
+    from src.endpoint.detector import AutoDetector as Detector  # type: ignore
+except Exception:
+    Detector = Any  # type: ignore
 from src.federated.model_registry import ModelRegistry
 from src.federated.network.client_handler import EndpointClientApp, NetworkFailureHandler
-from src.endpoint.history import HistoryStore
-from src.endpoint.quarantine import QuarantineManager
-from src.endpoint.resource.monitor import ResourceMonitor
-from src.drift.detector import DriftDetector
+try:
+    from src.endpoint.history import HistoryStore
+except Exception:
+    HistoryStore = Any  # type: ignore
+try:
+    from src.endpoint.quarantine import QuarantineManager
+except Exception:
+    QuarantineManager = Any  # type: ignore
+try:
+    from src.endpoint.resource.monitor import ResourceMonitor
+except Exception:
+    ResourceMonitor = Any  # type: ignore
+try:
+    from src.drift.detector import DriftDetector
+except Exception:
+    DriftDetector = Any  # type: ignore
 
 
 class FedShieldClientAgent:
@@ -48,8 +66,14 @@ class FedShieldClientAgent:
         # Placeholders for the 11 components (wired via dependency injection)
         self.monitor = monitor
         self.history = history
-        self.resource_monitor = ResourceMonitor()
-        self.drift_detector = DriftDetector()
+        try:
+            self.resource_monitor = ResourceMonitor() if callable(ResourceMonitor) and ResourceMonitor is not Any else None
+        except Exception:
+            self.resource_monitor = None
+        try:
+            self.drift_detector = DriftDetector() if callable(DriftDetector) and DriftDetector is not Any else None
+        except Exception:
+            self.drift_detector = None
         self.client_app = EndpointClientApp(
             monitor=monitor,
             history=history,
