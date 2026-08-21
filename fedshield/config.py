@@ -278,6 +278,33 @@ class LoggingConfig:
 
 
 @dataclass
+class ServerNetworkConfig:
+    """Secure client/server networking (Phase 19). Never hardcode localhost.
+
+    host: configurable (localhost | LAN IP | hostname | internet endpoint)
+    port: configurable
+    secure: when True, TLS/HTTPS is used; when False, plain channel (local sim)
+    tls_cert / tls_key / ca_cert: paths to PEM files (optional, for TLS)
+    """
+
+    host: str = "127.0.0.1"
+    port: int = 8080
+    secure: bool = True
+    tls_cert: Optional[str] = None
+    tls_key: Optional[str] = None
+    ca_cert: Optional[str] = None
+
+
+@dataclass
+class ClientIdentityConfig:
+    """Client authentication identity (Phase 19)."""
+
+    client_id: str = "client-001"
+    token: Optional[str] = None  # bearer token / HMAC credential
+    role: str = "client"  # client | admin
+
+
+@dataclass
 class PrivacyConfig:
     """Differential-privacy / privacy accounting (Phase 15).
 
