@@ -127,3 +127,17 @@ privacy:
   delta: 0.00001
   secure_rng: false
   accounting_mode: "rdp"
+
+# Phase 19 — Secure client/server networking (never hardcode localhost)
+server:
+  host: "127.0.0.1"   # localhost | LAN IP | hostname | internet endpoint
+  port: 8080
+  secure: true        # true = TLS/HTTPS, false = plain (local sim)
+  tls_cert: null
+  tls_key: null
+  ca_cert: null
+
+client_identity:
+  client_id: "client-001"
+  token: null         # provisioned bearer token
+  role: "client"      # client | admin
