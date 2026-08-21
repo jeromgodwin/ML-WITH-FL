@@ -411,6 +411,8 @@ class ExperimentConfig:
     attack: AttackConfig = field(default_factory=AttackConfig)
     defense: DefenseConfig = field(default_factory=DefenseConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
+    server: ServerNetworkConfig = field(default_factory=ServerNetworkConfig)
+    client_identity: ClientIdentityConfig = field(default_factory=ClientIdentityConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
