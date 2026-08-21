@@ -1,0 +1,115 @@
+# Phase 15 unified experiment example — all required fields explicitly defined.
+# Load via: python scripts/run_experiment.py --config configs/phase15_unified_example.yaml
+# Or JSON equivalent; YAML or JSON both accepted.
+
+name: phase15-example
+seed: 42
+
+# 1. dataset
+data:
+  data_dir: data
+  ember_version: "2018_2"
+
+# 2. seed (top-level) + partition/train seeds
+# 3. algorithm
+fl:
+  algorithm: fedavg  # centralized | fedavg | fedprox | personalized
+  num_clients: 10
+  client_fraction: 1.0
+  num_rounds: 2
+  proximal_mu: 0.0  # FedProx mu
+  personalized_probe_samples: 10000
+  personalized_probe_epochs: 2
+  personalized_probe_learning_rate: 0.01
+  personalized_head_epochs: 2
+  personalized_head_learning_rate: 0.01
+  evaluate_every: 1
+
+# 4. clients (mirrors fl.num_clients) + 5. client fraction + 6. partition strategy + 7. Non-IID severity
+partition:
+  strategy: iid  # iid | mild | moderate | severe
+  severity: moderate
+  clients: 10
+  seed: 42
+  val_fraction: 0.1
+  min_samples_per_client: 5000
+  test_strategy: global_test
+
+# 8. model
+model:
+  input_dim: 2381
+  hidden_layers: [256, 128]
+  dropout: 0.2
+  activation: relu
+  version: mlp-v1
+
+# 9. learning rate, 10. batch size, 11. local epochs, 12. FL rounds (above), 13. FedProx mu (above)
+train:
+  batch_size: 512
+  local_epochs: 1
+  learning_rate: 0.001
+  weight_decay: 0.0
+  optimizer: adam
+  seed: 42
+  epochs: 2
+  early_stopping_patience: 3
+
+# 14. personalization settings (fl.personalized_* above)
+# 15. resource policy
+endpoint:
+  resource:
+    enabled: false
+    max_cpu_percent: 80
+    min_battery_percent: 20
+    require_ac_power: false
+    idle_only: false
+    idle_min_seconds: 60
+    max_training_duration_sec: null
+    min_free_memory_mb: 512
+    check_interval_sec: 5.0
+  # 16. drift settings
+  drift:
+    enabled: false
+    timestamp_feature: "header_timestamp"
+    reference_frac: 0.5
+    psi_bins: 10
+    psi_suspect_threshold: 0.1
+    psi_detected_threshold: 0.2
+    cooldown_hours: 24.0
+    min_new_samples: 10000
+    max_retraining_rounds: 5
+    max_frequency_per_day: 1
+    validation_frac: 0.2
+
+# 17. privacy settings
+privacy:
+  enabled: false
+  noise_multiplier: 1.0
+  max_grad_norm: 1.0
+  delta: 0.00001
+  secure_rng: false
+  accounting_mode: "rdp"
+
+# 18. security settings (attack + defense)
+attack:
+  enabled: false
+  attack_type: "none"
+  n_malicious: 2
+  update_scale: 20.0
+  flip_frac: 1.0
+  seed: 42
+defense:
+  mode: "none"
+  clip_norm: null
+  anomaly_suspect_mult: 3.0
+  anomaly_detect_mult: 6.0
+  exclude_highly_anomalous: true
+  robust_trim_frac: 0.2
+  validation_frac: 0.05
+  validation_tolerance: 0.01
+
+logging:
+  level: INFO
+  log_dir: logs
+  file_output: true
+  structured_output: false

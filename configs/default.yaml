@@ -119,3 +119,11 @@ defense:
   robust_trim_frac: 0.2
   validation_frac: 0.05
   validation_tolerance: 0.01
+
+privacy:
+  enabled: false
+  noise_multiplier: 1.0
+  max_grad_norm: 1.0
+  delta: 0.00001
+  secure_rng: false
+  accounting_mode: "rdp"

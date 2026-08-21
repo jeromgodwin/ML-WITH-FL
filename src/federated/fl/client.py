@@ -43,6 +43,7 @@ from src.federated.fl.dataset import PartitionClientData
 from src.federated.models.mlp import (
     MLPConfig, build_mlp, build_personalized_mlp,
 )
+from src.federated.privacy.dp import PrivacySpec, apply_dp_to_update
 
 device = "cpu"
 
@@ -69,6 +70,7 @@ class FedAvgClient(NumPyClient):
         controller: Optional[Any] = None,
         cid: int = 0,
         attack_spec: Optional[Any] = None,
+        privacy_spec: Optional[Any] = None,
     ):
         self.model_cfg = model_cfg
         self.X_train = X_train
@@ -79,6 +81,7 @@ class FedAvgClient(NumPyClient):
         self.controller = controller  # Phase 12 resource gate (optional)
         self.cid = cid
         self.attack_spec = attack_spec  # Phase 14 simulated attack (optional)
+        self.privacy_spec = privacy_spec  # Phase 17 DP (optional)
         self.model = build_mlp(model_cfg)
 
     # ------------------------------------------------------------------
@@ -159,8 +162,32 @@ class FedAvgClient(NumPyClient):
         fit_time_ms = (time.perf_counter() - t0) * 1000.0
 
         params = self.get_parameters({})
+        # Phase 17 DP: client-side clipping + Gaussian noise on the update.
+        # Clipping happens here (client, on update vector), noise added here
+        # before transmission. The update is params_after - params_before.
+        dp_metrics: Dict[str, Any] = {}
+        if self.privacy_spec is not None and getattr(self.privacy_spec, "enabled", False):
+            spec = self.privacy_spec if isinstance(self.privacy_spec, PrivacySpec) else PrivacySpec.from_config(self.privacy_spec)
+            # Flatten update
+            flat_global = np.concatenate([np.asarray(p, dtype=np.float32).reshape(-1) for p in parameters])
+            flat_params = np.concatenate([np.asarray(p, dtype=np.float32).reshape(-1) for p in params])
+            update = flat_params - flat_global
+            # Deterministic per-client per-round RNG: seed + cid*1e4 + round*1e2
+            round_no = int(config.get("server_round", 0))
+            rng = np.random.default_rng(int(spec.seed) + int(self.cid) * 10000 + round_no * 100 + 17)
+            noised_update, dp_metrics = apply_dp_to_update(update, spec, rng=rng)
+            # Reconstruct params = global + noised_update
+            layer_sizes = [int(np.asarray(p).size) for p in parameters]
+            bounds = np.cumsum([0] + layer_sizes)
+            flat_global_list = [np.asarray(p, dtype=np.float32).reshape(-1) for p in parameters]
+            # Split noised_update back
+            new_flat = flat_global + noised_update
+            params = []
+            for i, (lb, ub) in enumerate(zip(bounds[:-1], bounds[1:])):
+                arr = new_flat[lb:ub].reshape(np.asarray(parameters[i]).shape).astype(np.float32)
+                params.append(arr)
         # Phase 14 simulated attack (scaled_update / replacement) transforms
-        # the returned parameters after honest training.
+        # the returned parameters after honest training (and after DP, if both enabled).
         if self.attack_spec is not None and is_malicious_cid(self.cid, self.attack_spec):
             params = apply_attack(params, list(parameters), self.cid, self.attack_spec)
         upload_bytes = serialize_bytes(params)
@@ -174,6 +201,8 @@ class FedAvgClient(NumPyClient):
             "prox_penalty": round(prox_terms, 6),
             "partition_cid": self.cid,
         }
+        if dp_metrics.get("dp_applied"):
+            metrics.update({f"dp_{k}" if not k.startswith("dp_") else k: v for k, v in dp_metrics.items()})
         if self.attack_spec is not None and is_malicious_cid(self.cid, self.attack_spec):
             metrics["simulated_attack"] = attack_type
         if self.controller is not None:
@@ -314,6 +343,23 @@ class PersonalizedClient(FedAvgClient):
         fit_time_ms = (time.perf_counter() - t0) * 1000.0
 
         params = self.get_parameters({})
+        # Phase 17 DP for personalized body (same clipping+noise, on body update)
+        dp_metrics: Dict[str, Any] = {}
+        if self.privacy_spec is not None and getattr(self.privacy_spec, "enabled", False):
+            spec = self.privacy_spec if isinstance(self.privacy_spec, PrivacySpec) else PrivacySpec.from_config(self.privacy_spec)
+            flat_global = np.concatenate([np.asarray(p, dtype=np.float32).reshape(-1) for p in parameters])
+            flat_params = np.concatenate([np.asarray(p, dtype=np.float32).reshape(-1) for p in params])
+            update = flat_params - flat_global
+            round_no = int(config.get("server_round", 0))
+            rng = np.random.default_rng(int(spec.seed) + int(self.cid) * 10000 + round_no * 100 + 17)
+            noised_update, dp_metrics = apply_dp_to_update(update, spec, rng=rng)
+            layer_sizes = [int(np.asarray(p).size) for p in parameters]
+            bounds = np.cumsum([0] + layer_sizes)
+            new_flat = flat_global + noised_update
+            params = []
+            for i, (lb, ub) in enumerate(zip(bounds[:-1], bounds[1:])):
+                arr = new_flat[lb:ub].reshape(np.asarray(parameters[i]).shape).astype(np.float32)
+                params.append(arr)
         upload_bytes = serialize_bytes(params)
         metrics = {
             "train_loss": round(bce_terms / n, 6),
@@ -325,6 +371,8 @@ class PersonalizedClient(FedAvgClient):
             "proximal_mu": 0.0,
             "prox_penalty": 0.0,
         }
+        if dp_metrics.get("dp_applied"):
+            metrics.update({f"dp_{k}" if not k.startswith("dp_") else k: v for k, v in dp_metrics.items()})
         if self.controller is not None:
             metrics["resource_gated"] = True
             metrics["head_epochs_completed"] = head_epochs_completed
@@ -346,6 +394,7 @@ def build_client_fn(
     cid: Optional[int] = None,
     controller: Optional[Any] = None,
     attack_spec: Optional[Any] = None,
+    privacy_spec: Optional[Any] = None,
 ) -> Any:
     """client_fn(cid) factory: each client materializes ONLY its own rows.
 
@@ -360,6 +409,8 @@ def build_client_fn(
 
     attack_spec: optional Phase-14 AttackSpec; the first ``n_malicious``
     clients simulate the configured abnormal-update attack (synthetic only).
+    privacy_spec: optional Phase-17 PrivacySpec; when enabled the client's
+    update is clipped to max_grad_norm and noised with sigma = noise_multiplier*C.
     """
 
     def client_fn(cid_str: str):
@@ -367,7 +418,7 @@ def build_client_fn(
         X_tr, y_tr, X_va, y_va = data.client_data(index)
         return FedAvgClient(model_cfg, X_tr, y_tr, X_va, y_va, seed=seed,
                             controller=controller, cid=index,
-                            attack_spec=attack_spec).to_client()
+                            attack_spec=attack_spec, privacy_spec=privacy_spec).to_client()
 
     return client_fn
 
@@ -379,6 +430,7 @@ def build_personalized_client_fn(
     cid: Optional[int] = None,
     controller: Optional[Any] = None,
     attack_spec: Optional[Any] = None,
+    privacy_spec: Optional[Any] = None,
 ) -> Any:
     """client_fn(cid) factory for PersonalizedClient (Phase 11).
 
@@ -391,6 +443,7 @@ def build_personalized_client_fn(
 
     controller: optional Phase-12 TrainingController shared by all clients.
     attack_spec: optional Phase-14 AttackSpec (synthetic abnormal updates).
+    privacy_spec: optional Phase-17 PrivacySpec (DP clipping + noise).
     """
 
     def client_fn(cid_str: str):
@@ -401,7 +454,8 @@ def build_personalized_client_fn(
             set_all_seeds(seed)
             client = PersonalizedClient(
                 model_cfg, X_tr, y_tr, X_va, y_va, seed=seed,
-                controller=controller, cid=index, attack_spec=attack_spec)
+                controller=controller, cid=index, attack_spec=attack_spec,
+                privacy_spec=privacy_spec)
         return client.to_client()
 
     return client_fn

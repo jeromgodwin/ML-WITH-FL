@@ -356,6 +356,19 @@ def run_fl_experiment(
 
     model_params_bytes = int(sum(
         np.asarray(a).nbytes for a in parameters_to_ndarrays(initial_parameters)))
+    model_param_count = int(sum(
+        np.asarray(a).size for a in parameters_to_ndarrays(initial_parameters)))
+    # For personalized, also compute full model size for reference (actual communication is body only)
+    if personalized:
+        from src.federated.models.mlp import build_mlp
+
+        _tmp_full = build_mlp(model_cfg)
+        _full_params = [p.detach().cpu().numpy() for p in _tmp_full.parameters()]
+        full_model_bytes = int(sum(p.nbytes for p in _full_params))
+        full_model_param_count = int(sum(p.size for p in _full_params))
+    else:
+        full_model_bytes = model_params_bytes
+        full_model_param_count = model_param_count
 
     evaluate_fn = _global_evaluate_fn(
         X_test, y_test, scale_inv, model_cfg,
@@ -393,9 +406,12 @@ def run_fl_experiment(
     # Phase 14: simulated attack + server-side defenses.
     from src.federated.defense.attack import AttackSpec
     from src.federated.defense.validation import ValidationGate
+    from src.federated.privacy.dp import PrivacySpec, privacy_report
     attack_spec = AttackSpec.from_config(cfg.attack)
+    privacy_spec = PrivacySpec.from_config(cfg.privacy)
     validation_gate = None
     defense_active = cfg.defense.mode != "none" or attack_spec.is_malicious
+    privacy_active = bool(privacy_spec.enabled)
     if defense_active:
         if cfg.defense.mode == "validation":
             X_val, y_val = _server_validation_set(
@@ -414,11 +430,13 @@ def run_fl_experiment(
             robust_trim_frac=cfg.defense.robust_trim_frac,
             validation_gate=validation_gate,
             **strategy_kwargs)
-    logger.info("%s experiment: %s strategy, %d rounds, %d clients, proximal_mu=%s%s%s",
+    logger.info("%s experiment: %s strategy, %d rounds, %d clients, proximal_mu=%s%s%s%s",
                 algorithm, data.strategy(), cfg.fl.num_rounds, data.n_clients,
                 proximal_mu, " (personalized head)" if personalized else "",
                 f" | defense={cfg.defense.mode} attack={attack_spec.attack_type}"
-                if defense_active else "")
+                if defense_active else "",
+                f" | privacy={privacy_spec.strength_label()} sigma={privacy_spec.sigma:.3f}"
+                if privacy_active else "")
 
     port = _free_port()
     address = f"127.0.0.1:{port}"
@@ -457,7 +475,8 @@ def run_fl_experiment(
         builder = build_personalized_client_fn if personalized else build_client_fn
         client_fn = builder(data, model_cfg, seed=seed, cid=cid,
                             controller=controller,
-                            attack_spec=attack_spec if defense_active else None)
+                            attack_spec=attack_spec if defense_active else None,
+                            privacy_spec=privacy_spec if privacy_active else None)
         t = threading.Thread(
             target=start_client,
             kwargs=dict(server_address=address, client_fn=client_fn,
@@ -510,12 +529,16 @@ def run_fl_experiment(
             },
         },
         "communication": {
+            "model_parameter_count": model_param_count,
             "model_parameter_bytes": model_params_bytes,
+            "full_model_parameter_count": full_model_param_count,
+            "full_model_bytes": full_model_bytes,
             "per_round": [{
                 "round": r["round"],
                 "download_bytes": r["download_bytes"],
                 "upload_bytes": r["upload_bytes"],
                 "bytes_this_round": r["bytes_this_round"],
+                "n_clients": r["n_clients_fit"],
             } for r in summary["rounds"]],
             "totals": summary["totals"],
         },
@@ -561,6 +584,18 @@ def run_fl_experiment(
                           if is_malicious_cid(c, attack_spec)]
         results["attack"] = attack_report(attack_spec, malicious_cids)
         results["defense"] = strategy.summarize_defense()
+
+    if privacy_active:
+        results["privacy"] = privacy_report(privacy_spec, cfg.fl.num_rounds, sampling_rate=cfg.fl.client_fraction)
+        results["privacy"]["config"] = {
+            "max_grad_norm": privacy_spec.max_grad_norm,
+            "noise_multiplier": privacy_spec.noise_multiplier,
+            "sigma": privacy_spec.sigma,
+            "delta": privacy_spec.delta,
+            "enabled": True,
+        }
+    else:
+        results["privacy"] = {"enabled": False, "mode": "none"}
 
     if personalized:
         head_model = build_personalized_mlp(model_cfg)

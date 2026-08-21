@@ -1,0 +1,34 @@
+# Custom matrix definition for Phase 15 (used with --matrix-config)
+# Each entry maps to one unified experiment; overrides are dotted keys.
+seed: 42
+matrix:
+  - name: centralized-baseline
+    algorithm: centralized
+    strategy: iid
+    overrides:
+      train.epochs: 2
+  - name: fedavg-iid
+    algorithm: fedavg
+    strategy: iid
+    overrides:
+      fl.num_rounds: 1
+      train.local_epochs: 1
+  - name: fedavg-mild
+    algorithm: fedavg
+    strategy: mild
+    overrides:
+      fl.num_rounds: 1
+      train.local_epochs: 1
+  - name: fedprox-moderate
+    algorithm: fedprox
+    strategy: moderate
+    overrides:
+      fl.num_rounds: 1
+      train.local_epochs: 1
+      fl.proximal_mu: 0.1
+  - name: personalized-severe
+    algorithm: personalized
+    strategy: severe
+    overrides:
+      fl.num_rounds: 1
+      train.local_epochs: 1

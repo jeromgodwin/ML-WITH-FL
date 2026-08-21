@@ -1,0 +1,24 @@
+# Phase 16 communication efficiency example
+# Measures actual serialized bytes — no estimates.
+
+seed: 42
+fl:
+  num_clients: 10
+  client_fraction: 1.0
+  algorithm: fedavg  # fedavg | fedprox | personalized
+  num_rounds: 5
+  proximal_mu: 0.0
+partition:
+  strategy: iid  # iid | mild | moderate | severe
+  severity: moderate
+model:
+  input_dim: 2381
+  hidden_layers: [256, 128]
+  dropout: 0.2
+train:
+  local_epochs: 5
+  batch_size: 512
+  learning_rate: 0.001
+# To compare different client counts / rounds / strategies, run:
+# python scripts/run_phase16_experiment.py --strategies iid,mild,moderate,severe \
+#   --algorithms fedavg,fedprox,personalized --rounds-list 5,10,20 --clients-list 10 --fractions 1.0

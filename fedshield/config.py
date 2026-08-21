@@ -278,6 +278,26 @@ class LoggingConfig:
 
 
 @dataclass
+class PrivacyConfig:
+    """Differential-privacy / privacy accounting (Phase 15).
+
+    enabled: master switch; when False no DP mechanism is applied.
+    noise_multiplier: Gaussian noise scale (sigma) for DP-SGD style.
+    max_grad_norm: per-sample gradient clipping norm.
+    delta: target delta for (epsilon, delta)-DP accounting.
+    secure_rng: use cryptographically secure RNG when True (slower).
+    accounting_mode: epsilon accounting method identifier.
+    """
+
+    enabled: bool = False
+    noise_multiplier: float = 1.0
+    max_grad_norm: float = 1.0
+    delta: float = 1e-5
+    secure_rng: bool = False
+    accounting_mode: str = "rdp"
+
+
+@dataclass
 class AttackConfig:
     """Controlled malicious-client simulation (Phase 14).
 
@@ -340,7 +360,17 @@ class DefenseConfig:
 
 @dataclass
 class ExperimentConfig:
-    """Root configuration for one experiment run."""
+    """Root configuration for one experiment run.
+
+    Top-level fields map to the Phase 15 unified-experiment schema:
+    dataset/data, seed, algorithm/fl.algorithm, clients/fl.num_clients,
+    client fraction/fl.client_fraction, partition strategy/severity,
+    model, learning rate/train.learning_rate, batch size/train.batch_size,
+    local epochs/train.local_epochs, FL rounds/fl.num_rounds,
+    FedProx mu/fl.proximal_mu, personalization/fl.personalized_*,
+    resource policy/endpoint.resource, drift/endpoint.drift,
+    privacy/privacy, security/attack+defense.
+    """
 
     name: str = "default"
     seed: int = 42
@@ -353,6 +383,7 @@ class ExperimentConfig:
     endpoint: EndpointConfig = field(default_factory=EndpointConfig)
     attack: AttackConfig = field(default_factory=AttackConfig)
     defense: DefenseConfig = field(default_factory=DefenseConfig)
+    privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
@@ -363,8 +394,27 @@ class ExperimentConfig:
         return cls.from_dict(raw)
 
     @classmethod
+    def from_json(cls, path: str | Path) -> "ExperimentConfig":
+        """Load a JSON config file into an ExperimentConfig."""
+        import json as _json
+
+        path = Path(path)
+        with open(path, "r", encoding="utf-8") as f:
+            raw = _json.load(f) or {}
+        return cls.from_dict(raw)
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> "ExperimentConfig":
+        """Load YAML or JSON (by extension) into an ExperimentConfig."""
+        path = Path(path)
+        if path.suffix.lower() == ".json":
+            return cls.from_json(path)
+        return cls.from_yaml(path)
+
+    @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "ExperimentConfig":
         """Build an ExperimentConfig from a nested dict, keeping defaults for absent keys."""
+        raw = _normalize_aliases(raw)
         return cls(**{k: v for k, v in _build(root_fields(cls), raw).items() if v is not None})
 
     def to_dict(self) -> dict[str, Any]:
@@ -393,6 +443,110 @@ def _sub_spec(cls: type) -> dict[str, Any]:
 
 def root_fields(cls) -> dict[str, Any]:
     return _sub_spec(cls)
+
+
+def _normalize_aliases(raw: dict[str, Any]) -> dict[str, Any]:
+    """Map Phase-15 flat aliases to the nested config structure.
+
+    Supports both flat keys (dataset, algorithm, clients, ...) and nested
+    dicts. Flat keys take precedence and are merged into the nested dicts.
+    Never mutates the input.
+    """
+    import copy as _copy
+
+    d = _copy.deepcopy(raw)
+    # dataset alias -> data
+    if "dataset" in d and "data" not in d:
+        v = d.pop("dataset")
+        if isinstance(v, str):
+            d["data"] = {"ember_version": v}
+        elif isinstance(v, dict):
+            d["data"] = v
+    elif "dataset" in d and isinstance(d.get("data"), dict) and isinstance(d["dataset"], dict):
+        # merge
+        merged = {**d.pop("dataset")}
+        d["data"] = {**merged, **d["data"]}
+
+    # algorithm -> fl.algorithm
+    if "algorithm" in d:
+        d.setdefault("fl", {})["algorithm"] = d.pop("algorithm")
+    # clients -> fl.num_clients + partition.clients
+    if "clients" in d:
+        v = d.pop("clients")
+        d.setdefault("fl", {})["num_clients"] = v
+        d.setdefault("partition", {})["clients"] = v
+    if "client_fraction" in d:
+        d.setdefault("fl", {})["client_fraction"] = d.pop("client_fraction")
+    if "partition_strategy" in d:
+        d.setdefault("partition", {})["strategy"] = d.pop("partition_strategy")
+    if "non_iid_severity" in d:
+        d.setdefault("partition", {})["severity"] = d.pop("non_iid_severity")
+    if "severity" in d and "partition" not in d:
+        d.setdefault("partition", {})["severity"] = d.pop("severity")
+    # model alias (already nested, pass through)
+    if "learning_rate" in d:
+        d.setdefault("train", {})["learning_rate"] = d.pop("learning_rate")
+    if "batch_size" in d:
+        d.setdefault("train", {})["batch_size"] = d.pop("batch_size")
+    if "local_epochs" in d:
+        d.setdefault("train", {})["local_epochs"] = d.pop("local_epochs")
+    for k in ("fl_rounds", "num_rounds", "rounds"):
+        if k in d:
+            d.setdefault("fl", {})["num_rounds"] = d.pop(k)
+            break
+    for k in ("fedprox_mu", "proximal_mu", "mu"):
+        if k in d:
+            d.setdefault("fl", {})["proximal_mu"] = d.pop(k)
+            break
+    # personalization settings
+    if "personalization" in d:
+        v = d.pop("personalization")
+        if isinstance(v, dict):
+            for pk, pv in v.items():
+                d.setdefault("fl", {})[pk] = pv
+    if "personalization_settings" in d:
+        v = d.pop("personalization_settings")
+        if isinstance(v, dict):
+            for pk, pv in v.items():
+                d.setdefault("fl", {})[pk] = pv
+    # resource/drift/privacy aliases
+    for flat, nested in (
+        ("resource_policy", ("endpoint", "resource")),
+        ("resource", ("endpoint", "resource")),
+        ("drift_settings", ("endpoint", "drift")),
+        ("drift", ("endpoint", "drift")),
+        ("privacy_settings", ("privacy",)),
+        ("privacy_config", ("privacy",)),
+    ):
+        if flat in d:
+            v = d.pop(flat)
+            if isinstance(v, dict):
+                cur = d
+                for part in nested[:-1]:
+                    cur = cur.setdefault(part, {})
+                leaf = nested[-1]
+                cur.setdefault(leaf, {}).update(v)
+            else:
+                # scalar not expected, ignore
+                pass
+    # security_settings -> attack + defense + optional privacy
+    if "security_settings" in d or "security" in d:
+        v = d.pop("security_settings", d.pop("security", None))
+        if isinstance(v, dict):
+            if "attack" in v:
+                d.setdefault("attack", {}).update(v["attack"] if isinstance(v["attack"], dict) else {})
+            if "defense" in v:
+                d.setdefault("defense", {}).update(v["defense"] if isinstance(v["defense"], dict) else {})
+            if "privacy" in v:
+                d.setdefault("privacy", {}).update(v["privacy"] if isinstance(v["privacy"], dict) else {})
+            # flat security keys that look like attack/defense keys
+            for k in ("attack_type", "n_malicious", "update_scale", "flip_frac"):
+                if k in v:
+                    d.setdefault("attack", {})[k] = v[k]
+            for k in ("mode", "clip_norm", "anomaly_suspect_mult", "anomaly_detect_mult"):
+                if k in v:
+                    d.setdefault("defense", {})[k] = v[k]
+    return d
 
 
 def _build(spec: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:

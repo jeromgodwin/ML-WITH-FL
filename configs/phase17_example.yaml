@@ -1,0 +1,31 @@
+# Phase 17 privacy-utility example
+# FL does not automatically provide complete privacy — raw files/rows stay local.
+# DP: client-side clipping (L2 on update vector) + Gaussian noise (N(0, sigma^2))
+#     sigma = noise_multiplier * max_grad_norm
+
+seed: 42
+fl:
+  algorithm: fedavg
+  num_clients: 10
+  num_rounds: 5
+  client_fraction: 1.0
+partition:
+  strategy: iid
+  severity: moderate
+model:
+  input_dim: 2381
+  hidden_layers: [256, 128]
+train:
+  local_epochs: 5
+  batch_size: 512
+privacy:
+  enabled: false      # No DP | moderate: noise_multiplier 1.0 | stronger: 2.0
+  noise_multiplier: 1.0
+  max_grad_norm: 1.0
+  delta: 0.00001
+  accounting_mode: rdp
+
+# Run via:
+# python scripts/run_phase17_experiment.py --rounds 5 --clients 10
+# Compares No DP / Moderate (sigma=1.0) / Stronger (sigma=2.0) and reports
+# accuracy, precision, recall, F1, ROC-AUC, convergence, communication, training time.
