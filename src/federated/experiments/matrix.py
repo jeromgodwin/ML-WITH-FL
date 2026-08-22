@@ -42,11 +42,16 @@ def fl_entry(
     seed: int = 42,
     **overrides: Any,
 ) -> Dict[str, Any]:
+    if strategy not in NONIID_LEVELS:
+        raise ValueError(f"unknown strategy {strategy!r} — expected one of {NONIID_LEVELS}")
+    if algorithm not in FL_ALGORITHMS + ["centralized"]:
+        raise ValueError(f"unknown algorithm {algorithm!r}")
     cfg = _base_cfg(seed)
     cfg.partition.strategy = strategy
     cfg.fl.algorithm = algorithm
     if algorithm == "fedprox" and cfg.fl.proximal_mu == 0.0:
         cfg.fl.proximal_mu = 0.1
+    # Personalized keeps probe settings from ExperimentConfig defaults (identical budgets)
     # apply overrides
     if overrides:
         cfg = cfg.with_overrides(**overrides)
