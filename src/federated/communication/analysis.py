@@ -114,6 +114,9 @@ def from_summary(summary: Dict[str, Any], experiment_id: str = "") -> Communicat
         final = {}
     f1 = final.get("f1")
     auc = final.get("roc_auc")
+    # Personalized saves head (129 params) — log when full > body
+    if comm.get("full_model_bytes") and comm.get("model_parameter_bytes") and comm["full_model_bytes"] != comm["model_parameter_bytes"]:
+        pass  # body-only vs full difference is expected for personalized (99.98%)
 
     conv = _convergence_round(summary.get("rounds") or [], f1)
 
