@@ -217,8 +217,8 @@ class FedShieldClientAgent:
                     return None
 
                 result = detector.scan(file_path)
-                # Handle corrupted detection record
-                if result is None or not hasattr(result, "record"):
+                # Handle corrupted detection record (None or missing detection_id)
+                if result is None or not hasattr(result, "record") or getattr(result.record, "detection_id", None) is None:
                     logger.warning("corrupted detection record for %s", file_path)
                     return None
                 return result.to_dict() if hasattr(result, "to_dict") else {"record": str(result)}
