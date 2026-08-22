@@ -510,7 +510,8 @@ def _normalize_aliases(raw: dict[str, Any]) -> dict[str, Any]:
         d.setdefault("partition", {})["strategy"] = d.pop("partition_strategy")
     if "non_iid_severity" in d:
         d.setdefault("partition", {})["severity"] = d.pop("non_iid_severity")
-    if "severity" in d and "partition" not in d:
+    if "severity" in d:
+        # flat severity always maps to partition.severity (takes precedence)
         d.setdefault("partition", {})["severity"] = d.pop("severity")
     # model alias (already nested, pass through)
     if "learning_rate" in d:
