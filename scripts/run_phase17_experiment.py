@@ -178,12 +178,13 @@ def main() -> None:
         print("dry-run: 3 cells")
         return
 
-    # Step 2: Run No DP / Moderate / Stronger sequentially (fresh processes via unified engine)
+    # Step 2: Run No DP / Moderate / Stronger sequentially (identical budgets, only privacy differs — xhigh)
+    assert args.rounds > 0 and args.clients > 0
     results: list[dict] = []
     labels: list[str] = []
     summaries: list[dict] = []
     for label in ("no_dp", "moderate", "stronger"):
-        logger.info("Phase17 cell %s: %s", label, PRIVACY_PRESETS[label])
+        logger.info("Phase17 cell %s: %s (identical: rounds=%d clients=%d strategy=%s algo=%s)", label, PRIVACY_PRESETS[label], args.rounds, args.clients, args.strategy, args.algorithm)
         res = run_privacy_cell(
             label, PRIVACY_PRESETS[label], args.rounds, args.clients, args.strategy, args.algorithm, output_parent=output_root, seed=42
         )
