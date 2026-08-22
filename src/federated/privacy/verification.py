@@ -70,6 +70,9 @@ def verify_privacy_invariants() -> Dict[str, Any]:
         if "open(" in txt and ".exe" in txt.lower():
             checks["raw_files_remain_local"] = False
             checks["details"].append(f"WARNING: {p.name} may touch raw files")
+        if "raw_file" in txt or "file_bytes" in txt:
+            checks["server_receives_only_updates"] = False
+            checks["details"].append(f"WARNING: {p.name} may transmit raw bytes")
 
     checks["summary"] = (
         "VERIFIED" if all([checks["raw_files_remain_local"], checks["raw_feature_rows_remain_local"], checks["server_receives_only_updates"]]) else "FAILED"
