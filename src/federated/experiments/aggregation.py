@@ -12,9 +12,11 @@ from src.federated.experiments.plots import plot_comparison_bars
 
 def collect_summaries(experiment_dirs: List[Path]) -> List[Dict[str, Any]]:
     """Load metrics/summary.json from each experiment dir (missing values stay None)."""
+    from fedshield.logging_setup import get_logger
+    logger = get_logger(__name__)
     rows: List[Dict[str, Any]] = []
     for d in experiment_dirs:
-        # Prefer metrics/summary.json (unified) fallback to summary.json
+        # Prefer metrics/summary.json (unified) fallback to summary.json — both are checked
         candidates = [d / "metrics" / "summary.json", d / "summary.json"]
         summary = None
         for c in candidates:
@@ -22,9 +24,11 @@ def collect_summaries(experiment_dirs: List[Path]) -> List[Dict[str, Any]]:
                 try:
                     summary = json.loads(c.read_text(encoding="utf-8"))
                     break
-                except Exception:
+                except Exception as e:
+                    logger.warning("failed to load %s: %s", c, e)
                     continue
         if summary is None:
+            logger.warning("no summary found for %s (skipped, not invented)", d)
             continue
         # also load config and reproducibility for columns
         cfg = {}
