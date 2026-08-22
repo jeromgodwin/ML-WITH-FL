@@ -41,6 +41,7 @@ class PrivacySpec:
     noise_multiplier: float = 1.0
     max_grad_norm: float = 1.0
     delta: float = 1e-5
+    secure_rng: bool = False
     accounting_mode: str = "rdp"
     seed: int = 42
 
@@ -55,6 +56,7 @@ class PrivacySpec:
                 noise_multiplier=float(cfg.get("noise_multiplier", 1.0)),
                 max_grad_norm=float(cfg.get("max_grad_norm", 1.0)),
                 delta=float(cfg.get("delta", 1e-5)),
+                secure_rng=bool(cfg.get("secure_rng", False)),
                 accounting_mode=str(cfg.get("accounting_mode", "rdp")),
                 seed=int(cfg.get("seed", 42)) if "seed" in cfg else 42,
             )
@@ -64,6 +66,7 @@ class PrivacySpec:
             noise_multiplier=float(getattr(cfg, "noise_multiplier", 1.0)),
             max_grad_norm=float(getattr(cfg, "max_grad_norm", 1.0)),
             delta=float(getattr(cfg, "delta", 1e-5)),
+            secure_rng=bool(getattr(cfg, "secure_rng", False)),
             accounting_mode=str(getattr(cfg, "accounting_mode", "rdp")),
             seed=int(getattr(cfg, "seed", 42)) if hasattr(cfg, "seed") else 42,
         )
