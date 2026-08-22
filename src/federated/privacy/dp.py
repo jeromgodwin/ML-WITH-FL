@@ -68,6 +68,15 @@ class PrivacySpec:
             seed=int(getattr(cfg, "seed", 42)) if hasattr(cfg, "seed") else 42,
         )
 
+    def validate(self) -> None:
+        if self.enabled:
+            if self.noise_multiplier <= 0:
+                raise ValueError(f"noise_multiplier must be >0, got {self.noise_multiplier}")
+            if self.max_grad_norm <= 0:
+                raise ValueError(f"max_grad_norm must be >0, got {self.max_grad_norm}")
+            if not 0 < self.delta < 1:
+                raise ValueError(f"delta must be in (0,1), got {self.delta}")
+
     @property
     def sigma(self) -> float:
         """Noise scale (standard deviation) = noise_multiplier * max_grad_norm."""
@@ -103,14 +112,24 @@ def add_gaussian_noise(
     update: np.ndarray,
     sigma: float,
     rng: np.random.Generator,
+    secure_rng: bool = False,
 ) -> np.ndarray:
     """Add Gaussian noise N(0, sigma^2) per coordinate.
 
     Noise is added on the CLIENT, after clipping, before transmission.
     The noised update has the same shape/bytes as the original.
+    When secure_rng=True, entropy is mixed from secrets.token_bytes.
     """
     if sigma <= 0:
         return update
+    if secure_rng:
+        import secrets
+        # Mix secrets entropy into the Generator's state (best-effort)
+        try:
+            entropy = int.from_bytes(secrets.token_bytes(8), "big")
+            rng = np.random.default_rng(entropy ^ int(rng.bit_generator.state["state"]["state"] & 0xFFFFFFFF))
+        except Exception:
+            pass
     noise = rng.normal(0.0, sigma, size=update.shape).astype(np.float32)
     return (update + noise).astype(np.float32)
 
@@ -129,11 +148,12 @@ def apply_dp_to_update(
         return update, {"dp_applied": False}
     if rng is None:
         rng = np.random.default_rng(seed if seed is not None else spec.seed)
+    spec.validate()
     # 1. Clip (where)
     clipped, did_clip, orig_norm, clipped_norm = clip_update(update, spec.max_grad_norm)
     # 2. Noise (where)
     sigma = spec.sigma
-    noised = add_gaussian_noise(clipped, sigma, rng)
+    noised = add_gaussian_noise(clipped, sigma, rng, secure_rng=spec.secure_rng)
     metrics = {
         "dp_applied": True,
         "dp_clip_norm": spec.max_grad_norm,
@@ -144,6 +164,7 @@ def apply_dp_to_update(
         "dp_clipped_norm": round(clipped_norm, 6),
         "dp_noised_norm": round(float(np.linalg.norm(noised)), 6),
         "dp_delta": spec.delta,
+        "dp_secure_rng": spec.secure_rng,
     }
     return noised, metrics
 
@@ -166,9 +187,9 @@ def compute_rdp_epsilon(
     """
     if sigma <= 0 or delta <= 0 or delta >= 1 or rounds <= 0:
         return None
-    # Search alpha in [2, 64]
+    # Search alpha in [2, 64] with finer granularity (xhigh)
     best_eps = None
-    for alpha in [2, 4, 8, 16, 32, 64]:
+    for alpha in [2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64]:
         # Per-step RDP
         if sampling_rate >= 1.0:
             rdp_step = alpha / (2 * sigma * sigma)
