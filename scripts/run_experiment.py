@@ -112,13 +112,16 @@ def main() -> None:
                     logger.warning("ignoring malformed --set %r (expected k=v)", ov)
                     continue
                 k, v = ov.split("=", 1)
-                # try to parse v as yaml literal
+                # strict parsing: ast.literal_eval first, then yaml, else string
+                import ast
                 try:
-                    import yaml
-
-                    v_parsed = yaml.safe_load(v)
+                    v_parsed = ast.literal_eval(v)
                 except Exception:
-                    v_parsed = v
+                    try:
+                        import yaml
+                        v_parsed = yaml.safe_load(v)
+                    except Exception:
+                        v_parsed = v
                 from fedshield.config import set_dotted
 
                 set_dotted(cfg, k, v_parsed)
@@ -156,12 +159,15 @@ def main() -> None:
             logger.warning("ignoring malformed --set %r (expected k=v)", ov)
             continue
         k, v = ov.split("=", 1)
+        import ast
         try:
-            import yaml
-
-            v_parsed = yaml.safe_load(v)
+            v_parsed = ast.literal_eval(v)
         except Exception:
-            v_parsed = v
+            try:
+                import yaml
+                v_parsed = yaml.safe_load(v)
+            except Exception:
+                v_parsed = v
         from fedshield.config import set_dotted
 
         set_dotted(cfg, k, v_parsed)
