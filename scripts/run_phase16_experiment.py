@@ -141,6 +141,13 @@ def main() -> None:
     rounds_list = [int(x) for x in args.rounds_list.split(",") if x.strip()]
     clients_list = [int(x) for x in args.clients_list.split(",") if x.strip()]
     fractions = [float(x) for x in args.fractions.split(",") if x.strip()]
+    # xhigh validation: ensure budgets are sane
+    for f in fractions:
+        if not 0 < f <= 1.0:
+            raise ValueError(f"client_fraction must be in (0,1], got {f}")
+    for r in rounds_list:
+        if r <= 0:
+            raise ValueError(f"rounds must be >0, got {r}")
 
     # Build matrix: algorithm x strategy x rounds x clients x fraction
     # For --full-matrix, expand to all combos; otherwise default is minimal (current lists)
