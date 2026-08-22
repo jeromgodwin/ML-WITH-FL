@@ -38,12 +38,17 @@ class ScanResult:
     extraction_ms: float
     inference_ms: float
     total_ms: float
+    explanation: Optional[Dict[str, Any]] = None
+    explanation_latency_ms: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         d = self.record.to_dict()
         d["feature_extraction_ms"] = round(self.extraction_ms, 3)
         d["inference_ms"] = round(self.inference_ms, 3)
         d["total_scan_ms"] = round(self.total_ms, 3)
+        if self.explanation:
+            d["explanation"] = self.explanation
+            d["explanation_latency_ms"] = round(self.explanation_latency_ms, 3)
         return d
 
 
@@ -117,6 +122,21 @@ class AutoDetector:
         p = float(probs[0])
         inference_ms = (time.perf_counter() - t_infer) * 1000.0
 
+        # 8b. explainability (Enhancement 4) — actual feature names, no fabrication
+        explanation = None
+        explanation_latency_ms = 0.0
+        try:
+            from src.federated.explainability.explainer import FeatureExplainer
+            explainer = FeatureExplainer(self.bundle.model, list(self.bundle.schema.get("names", [])))
+            top_features, lat = explainer.explain(fv.features, top_k=3)
+            explanation = {
+                "top_features": top_features,
+                "note": "Top contributing signals based on actual feature values * first-layer weights — not proof of maliciousness",
+            }
+            explanation_latency_ms = lat
+        except Exception as e:
+            logger.debug("explanation failed: %s", e)
+
         # 9. calculate risk
         risk_score, risk_level, verdict, action = self.risk.decide(p)
         # 10. verdict + 11. record
@@ -139,7 +159,7 @@ class AutoDetector:
         )
         # 12. trigger configured action
         self._trigger_action(path, record)
-        return ScanResult(record, extraction_ms, inference_ms, record.analysis_duration_ms)
+        return ScanResult(record, extraction_ms, inference_ms, record.analysis_duration_ms, explanation, explanation_latency_ms)
 
     # ------------------------------------------------------------------
     def _file_type(self, path: Path) -> str:
