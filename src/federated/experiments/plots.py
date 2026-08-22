@@ -7,6 +7,9 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from fedshield.logging_setup import get_logger
+logger = get_logger(__name__)
+
 
 def plot_f1_per_round(
     rounds: List[Dict[str, Any]],
@@ -19,7 +22,8 @@ def plot_f1_per_round(
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-    except Exception:
+    except Exception as e:
+        logger.warning("matplotlib not available — skipping plot %s: %s", out_path, e)
         return None
     if not rounds:
         return None
@@ -73,7 +77,8 @@ def plot_communication(
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-    except Exception:
+    except Exception as e:
+        logger.warning("matplotlib not available — skipping plot %s: %s", out_path, e)
         return None
     if not rounds or not any(r.get("bytes_this_round") is not None for r in rounds):
         return None
@@ -103,7 +108,8 @@ def plot_comparison_bars(
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-    except Exception:
+    except Exception as e:
+        logger.warning("matplotlib not available — skipping plot %s: %s", out_path, e)
         return None
     # comparison: {label: metrics dict}
     labels = []
