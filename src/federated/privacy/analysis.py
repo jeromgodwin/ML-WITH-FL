@@ -119,12 +119,15 @@ def generate_privacy_utility_plots(rows: List[Dict[str, Any]], out_dir: Path) ->
         return []
     out_dir.mkdir(parents=True, exist_ok=True)
     created: List[Path] = []
-    # Filter rows with sigma and f1
+    # Filter rows with sigma and f1 (xhigh: deduplicate no_dp already at sigma 0)
     pts = [(r.get("sigma"), r.get("f1"), str(r.get("privacy_strength"))) for r in rows if r.get("sigma") is not None and r.get("f1") is not None]
-    # Include No DP as sigma=0
-    for r in rows:
-        if str(r.get("privacy_strength")).lower() in ("no_dp", "none") and r.get("f1") is not None:
-            pts.append((0.0, r["f1"], "no_dp"))
+    # Include No DP as sigma=0 if not already present
+    has_no_dp = any(p[0] == 0.0 for p in pts)
+    if not has_no_dp:
+        for r in rows:
+            if str(r.get("privacy_strength")).lower() in ("no_dp", "none") and r.get("f1") is not None:
+                pts.append((0.0, r["f1"], "no_dp"))
+                break
     # Deduplicate no_dp duplicate if already present
     # Use first occurrence
     if not pts:
