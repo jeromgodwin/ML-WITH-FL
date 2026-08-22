@@ -22,11 +22,12 @@ class ExperimentStorage:
         self.root = Path(root)
         self.experiment_id = experiment_id
         self.dir = self.root / experiment_id
-        if self.dir.exists():
+        try:
+            self.dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
             raise FileExistsError(
                 f"experiment directory already exists (never overwrite): {self.dir}"
-            )
-        self.dir.mkdir(parents=True, exist_ok=False)
+            ) from None
         # subdirs
         (self.dir / "metrics").mkdir(parents=True, exist_ok=True)
         (self.dir / "plots").mkdir(parents=True, exist_ok=True)
