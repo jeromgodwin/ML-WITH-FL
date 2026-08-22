@@ -224,10 +224,11 @@ def _run_centralized(cfg: ExperimentConfig, vectorized: Path, storage: Experimen
     val_idx = indices["val_idx"]
     labeled_train = train_idx[(y_train_mm[train_idx] == 0) | (y_train_mm[train_idx] == 1)]
     labeled_val = val_idx[(y_train_mm[val_idx] == 0) | (y_train_mm[val_idx] == 1)]
+    # Gather both splits before releasing memmap to avoid second mmap load
     Xtr = gather(X_train_mm, labeled_train)
+    Xva = gather(X_train_mm, labeled_val)
     del X_train_mm
     gc.collect()
-    Xva = gather(np.load(vectorized_dir / "X_train.npy", mmap_mode="r"), labeled_val)
     ytr = np.asarray(y_train_mm[labeled_train], dtype=np.int8)
     yva = np.asarray(y_train_mm[labeled_val], dtype=np.int8)
 
