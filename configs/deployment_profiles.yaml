@@ -1,0 +1,15 @@
+# Deployment profiles — dev / LAN / Internet (Enhancement 24)
+# Change via config file, not source code
+
+development:
+  server: {host: "127.0.0.1", port: 8000, secure: false}
+  clients: "simulated threads on one laptop"
+
+local_network:
+  server: {host: "192.168.1.10", port: 443, secure: true, tls_cert: "certs/server.crt", ca_cert: "certs/ca.crt"}
+  clients: "multiple machines on LAN, Bearer tokens"
+
+internet:
+  server: {host: "fedshield.example.com", port: 443, secure: true, tls_cert: "certs/server.crt", ca_cert: "certs/ca.crt"}
+  clients: "geographically distributed, Internet, authenticated encrypted"
+  firewall: "open 443, provision via admin"
