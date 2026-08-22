@@ -43,7 +43,14 @@ def collect_environment_metadata() -> Dict[str, Any]:
                 ver = getattr(_y, "__version__", "unknown")
             meta[f"{pkg}_version"] = str(ver) if ver else "unknown"
         except Exception:
-            meta[f"{pkg}_version"] = None
+            meta[f"{pkg}_version"] = "unknown"
+
+    # pip freeze hash (best-effort, for reproducibility)
+    try:
+        freeze = subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True, timeout=10)
+        meta["pip_freeze_sha256"] = hashlib.sha256(freeze.encode()).hexdigest()[:12]
+    except Exception:
+        meta["pip_freeze_sha256"] = "unknown"
 
     # git state (best-effort)
     try:
@@ -62,9 +69,9 @@ def collect_environment_metadata() -> Dict[str, Any]:
             meta["git_branch"] = branch
             meta["git_dirty"] = bool(dirty)
     except Exception:
-        meta["git_commit"] = None
-        meta["git_branch"] = None
-        meta["git_dirty"] = None
+        meta["git_commit"] = "unknown"
+        meta["git_branch"] = "unknown"
+        meta["git_dirty"] = "unknown"
 
     return meta
 
