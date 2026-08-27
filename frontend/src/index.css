@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-base-950 text-zinc-100 antialiased;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  ::selection {
+    @apply bg-cyan-glow/30 text-white;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-cyan-glow/60 ring-offset-2 ring-offset-base-950;
+  }
+}
+
+/* Ambient ground plane: faint grid + two drifting glow blobs behind all glass elements */
+.bg-field {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  background-color: theme('colors.base.950');
+  background-image: theme('backgroundImage.grid-faint');
+  background-size: theme('backgroundSize.grid');
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 20%, black 40%, transparent 90%);
+}
+
+.bg-field::before,
+.bg-field::after {
+  content: '';
+  position: absolute;
+  width: 44vw;
+  height: 44vw;
+  min-width: 480px;
+  min-height: 480px;
+  max-width: 720px;
+  max-height: 720px;
+  border-radius: 9999px;
+  filter: blur(120px);
+  opacity: 0.32;
+  will-change: transform;
+}
+
+.bg-field::before {
+  background: radial-gradient(circle at 30% 30%, theme('colors.cyan.glow'), transparent 70%);
+  top: -12%;
+  left: -8%;
+  animation: blobMove 22s ease-in-out infinite;
+}
+
+.bg-field::after {
+  background: radial-gradient(circle at 70% 70%, theme('colors.violet.glow'), transparent 70%);
+  bottom: -14%;
+  right: -6%;
+  animation: blobMove 30s ease-in-out infinite reverse;
+}
+
+@keyframes blobMove {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(4%, -6%) scale(1.08); }
+  66%      { transform: translate(-3%, 4%) scale(0.96); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg-field::before,
+  .bg-field::after {
+    animation: none;
+  }
+}
