@@ -1,4 +1,4 @@
-﻿"""File system monitoring for new/downloaded PE files.
+"""File system monitoring for new/downloaded PE files.
 
 Safety contract
 ---------------
@@ -77,16 +77,30 @@ def has_pe_signature(path: Path) -> bool:
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
-    """Write JSON atomically (temp file + rename) to avoid torn reads."""
+    """Write JSON atomically (temp file + rename) to avoid torn reads.
+    Includes a retry loop to handle Windows concurrent read locks."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-        os.replace(tmp, str(path))
+            
+        max_retries = 20
+        for attempt in range(max_retries):
+            try:
+                os.replace(tmp, str(path))
+                break
+            except PermissionError:
+                if attempt < max_retries - 1:
+                    time.sleep(0.05)
+                else:
+                    raise
     finally:
         if os.path.exists(tmp):
-            os.unlink(tmp)
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
 
 
 class FileMonitor:
