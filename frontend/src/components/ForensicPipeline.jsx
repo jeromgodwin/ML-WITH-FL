@@ -81,7 +81,7 @@ export default function ForensicPipeline({ activeFile, events }) {
       switch(phaseId) {
           case 'detect':
               return [
-                  { name: 'Directory Event Received', state: 'COMPLETE', value: f.timestamp ? new Date(f.timestamp*1000).toLocaleTimeString() : '—' },
+                  { name: 'Directory Event Received', state: 'COMPLETE', value: f.timestamp ? new Date(typeof f.timestamp === 'string' ? f.timestamp : f.timestamp * 1000).toLocaleTimeString() : '—' },
                   { name: 'File Path Captured', state: 'COMPLETE', value: f.path || '—' },
                   { name: 'File Existence Verified', state: 'COMPLETE' },
                   { name: 'File Metadata Captured', state: 'COMPLETE', value: f.size ? `${f.size} bytes` : '—' },
@@ -286,7 +286,7 @@ export default function ForensicPipeline({ activeFile, events }) {
                   [...events].reverse().map((e, idx) => (
                       <div key={idx} className="flex gap-4">
                           <span className="text-zinc-600 shrink-0">
-                              {new Date(e.time * 1000).toISOString().split('T')[1].slice(0, -1)}
+                              {new Date(e.time * 1000).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                           </span>
                           <span className={`
                               ${e.type === 'alert' ? 'text-console-red' : 

@@ -438,11 +438,12 @@ export default function App() {
         // Build timeline
         const evts = []
         arr.forEach(f => {
-          if (f.scan_status === 'scanned') evts.push({ time: f.timestamp || Date.now()/1000, msg: `Scan complete: ${f.filename}`, type: 'info' })
-          if (f.action === 'QUARANTINE') evts.push({ time: f.timestamp || Date.now()/1000, msg: `File quarantined: ${f.filename}`, type: 'quarantine' })
-          if (f.verdict === 'HIGH') evts.push({ time: f.timestamp || Date.now()/1000, msg: `Malicious classification: ${f.filename}`, type: 'alert' })
-          if (f.scan_status === 'scanning') evts.push({ time: f.timestamp || Date.now()/1000, msg: `Scan started: ${f.filename}`, type: 'scanning' })
-          evts.push({ time: (f.timestamp||Date.now()/1000) - 1, msg: `New file detected: ${f.filename}`, type: 'detected' })
+          const tSec = typeof f.timestamp === 'string' ? (new Date(f.timestamp).getTime() / 1000) : (f.timestamp || (Date.now()/1000));
+          if (f.scan_status === 'scanned') evts.push({ time: tSec, msg: `Scan complete: ${f.filename}`, type: 'info' })
+          if (f.action === 'QUARANTINE') evts.push({ time: tSec, msg: `File quarantined: ${f.filename}`, type: 'quarantine' })
+          if (f.verdict === 'HIGH') evts.push({ time: tSec, msg: `Malicious classification: ${f.filename}`, type: 'alert' })
+          if (f.scan_status === 'scanning') evts.push({ time: tSec, msg: `Scan started: ${f.filename}`, type: 'scanning' })
+          evts.push({ time: tSec - 1, msg: `New file detected: ${f.filename}`, type: 'detected' })
         })
         setEvents(evts.sort((a,b)=> b.time - a.time).slice(0, 10))
         if(Array.isArray(cList) && cList.length) setComp(cList[0])
