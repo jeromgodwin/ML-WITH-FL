@@ -96,23 +96,26 @@ export default function ForensicPipeline({ activeFile, events }) {
                   { name: 'File Signature Checked', state: isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
               ];
           case 'hash':
+              const md5 = f.scan_result?.md5 || f.md5;
+              const sha1 = f.scan_result?.sha1 || f.sha1;
               return [
                   { name: 'SHA-256 Generated', state: f.sha256 ? 'COMPLETE' : isScan ? 'PROCESSING' : 'WAITING', value: f.sha256 },
-                  { name: 'MD5 Generated', state: f.md5 ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: f.md5 },
-                  { name: 'SHA-1 Generated', state: f.sha1 ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: f.sha1 },
+                  { name: 'MD5 Generated', state: md5 ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: md5 },
+                  { name: 'SHA-1 Generated', state: sha1 ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: sha1 },
                   { name: 'Known-Hash Lookup', state: isComp ? 'SKIPPED' : isScan ? 'PROCESSING' : 'WAITING' },
               ];
           case 'features':
-              const hasFeatures = !!f.vulnerability?.explanation?.top_features || !!f.explanation?.top_features;
-              const fCount = f.vulnerability?.explanation?.top_features?.length || f.explanation?.top_features?.length;
+              const hasFeatures = !!f.vulnerability?.explanation?.top_features || !!f.explanation?.top_features || !!f.scan_result?.explanation?.top_features;
+              const fCount = f.vulnerability?.explanation?.top_features?.length || f.explanation?.top_features?.length || f.scan_result?.explanation?.top_features?.length;
+              const pe = f.scan_result?.pe_info || f.pe_info;
               return [
                   { name: 'Metadata Extraction', state: hasFeatures ? 'COMPLETE' : isComp ? 'SKIPPED' : isScan ? 'PROCESSING' : 'WAITING' },
                   { name: 'Feature Vector Construction', state: hasFeatures ? 'COMPLETE' : isComp ? 'SKIPPED' : isScan ? 'PROCESSING' : 'WAITING', value: hasFeatures ? `${fCount} features extracted` : null },
-                  { name: 'PE Header Parsing', state: f.pe_info?.has_header ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
-                  { name: 'DOS Header Analysis', state: f.pe_info?.has_dos ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
-                  { name: 'Section Extraction', state: f.pe_info?.sections ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: f.pe_info?.sections ? `${f.pe_info.sections} sections` : null },
-                  { name: 'Import Table Analysis', state: f.pe_info?.imports ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: f.pe_info?.imports ? `${f.pe_info.imports} imports` : null },
-                  { name: 'Entropy Calculation', state: f.pe_info?.entropy ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
+                  { name: 'PE Header Parsing', state: pe?.has_header ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
+                  { name: 'DOS Header Analysis', state: pe?.has_dos ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
+                  { name: 'Section Extraction', state: pe?.sections ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: pe?.sections ? `${pe.sections} sections` : null },
+                  { name: 'Import Table Analysis', state: pe?.imports ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: pe?.imports ? `${pe.imports} imports` : null },
+                  { name: 'Entropy Calculation', state: pe?.entropy ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
               ];
           case 'ml':
               const hasProb = f.vulnerability?.malware_probability != null || f.malware_probability != null;
