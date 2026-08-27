@@ -31,7 +31,7 @@ const PHASES = [
 export default function ForensicPipeline({ activeFile, events }) {
   const [activeTab, setActiveTab] = useState('detect');
   const [autoScrollLog, setAutoScrollLog] = useState(true);
-  const logEndRef = useRef(null);
+  const logContainerRef = useRef(null);
 
   const isComp = checkIsComplete(activeFile);
   const isScan = stateFor(activeFile) === 'SCANNING';
@@ -51,8 +51,8 @@ export default function ForensicPipeline({ activeFile, events }) {
   }, [activeFile?.sha256, activeFile?.scan_status, activeFile?.verdict, activeFile?.vulnerability?.verdict]);
 
   useEffect(() => {
-    if (autoScrollLog && logEndRef.current) {
-        logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (autoScrollLog && logContainerRef.current) {
+        logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
   }, [events, autoScrollLog]);
 
@@ -279,7 +279,7 @@ export default function ForensicPipeline({ activeFile, events }) {
                   {autoScrollLog ? 'AUTO-SCROLL ON' : 'AUTO-SCROLL OFF'}
               </button>
           </div>
-          <div className="h-[200px] overflow-y-auto p-4 font-mono text-xs space-y-2">
+          <div ref={logContainerRef} className="h-[200px] overflow-y-auto p-4 font-mono text-xs space-y-2">
               {events.length === 0 ? (
                   <div className="text-zinc-600">Waiting for live events...</div>
               ) : (
@@ -299,7 +299,6 @@ export default function ForensicPipeline({ activeFile, events }) {
                       </div>
                   ))
               )}
-              <div ref={logEndRef} />
           </div>
       </div>
     </div>
