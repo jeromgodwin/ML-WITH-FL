@@ -26,4 +26,7 @@ export const api = {
   models: () => fetchJSON('/api/v1/models'),
   candidates: () => fetchJSON('/api/v1/models/candidates'),
   communication: (expId) => fetchJSON(`/api/v1/fl/experiments/${expId}/metrics/rounds`),
+  monitorStatus: () => fetchJSON('/api/v1/monitor/status'),
+  monitorFiles: (limit = 20) => fetchJSON(`/api/v1/monitor/files?limit=${limit}`),
+  monitorDetections: (limit = 20) => fetchJSON(`/api/v1/monitor/detections?limit=${limit}`),
 }

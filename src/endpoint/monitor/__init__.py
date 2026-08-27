@@ -116,6 +116,9 @@ class FileMonitor:
         # path -> sha256 of last dispatched content; unchanged files are skipped
         self._scanned: Dict[str, str] = {}
         self._recent_events: List[dict] = []
+        # All arrivals (PE + non-PE) for dashboard visibility — every file that reaches a watched dir
+        self._recent_all_files: List[dict] = []
+        self._all_files_seen: int = 0
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._started_at: Optional[float] = None
@@ -140,6 +143,9 @@ class FileMonitor:
                 "files_analyzed": self._files_analyzed,
                 "errors": self._errors,
                 "recent_events": list(reversed(self._recent_events[-10:])),
+                # New: every file arrival (PE + non-PE) with scan + vulnerability
+                "all_files_seen": self._all_files_seen,
+                "recent_all_files": list(reversed(self._recent_all_files[-20:])),
             }
 
     def write_status_file(self, path: Path) -> None:
@@ -218,24 +224,74 @@ class FileMonitor:
                 stat = entry.stat()
             except OSError:
                 continue
-            if not self._is_target(entry, stat.st_size):
-                continue
+            # Oversized check — record only for new arrivals, ignore historical old files
             if self.config.max_file_size and stat.st_size > self.config.max_file_size:
                 logger.debug("Skipping oversized file: %s (%d bytes)", entry, stat.st_size)
+                key = str(entry)
+                with self._lock:
+                    started = self._started_at
+                    if started is not None and stat.st_mtime < started - 5:
+                        if self._seen.get(key) != (stat.st_mtime, stat.st_size):
+                            self._seen[key] = (stat.st_mtime, stat.st_size)
+                        continue
+                    if self._seen.get(key) != (stat.st_mtime, stat.st_size):
+                        self._seen[key] = (stat.st_mtime, stat.st_size)
+                        self._all_files_seen += 1
+                        self._recent_all_files.append({
+                            "path": str(entry),
+                            "filename": entry.name,
+                            "size": stat.st_size,
+                            "extension": entry.suffix.lower(),
+                            "sha256": "",
+                            "detected_at": round(self.time_fn(), 3),
+                            "scan_status": "skipped",
+                            "scan_reason": f"oversized > {self.config.max_file_size} bytes",
+                            "is_pe": False,
+                            "vulnerability": {"note": "File exceeds max_file_size — not scanned", "risk": "unknown"},
+                        })
                 continue
 
             key = str(entry)
             with self._lock:
                 last = self._seen.get(key)
+                started = self._started_at
             new_or_changed = last is None or (stat.st_mtime, stat.st_size) != last
 
             if not new_or_changed:
                 continue  # unchanged since last scan
 
+            # Fast path for historical files — during first scan, skip old files even if new path to avoid flood
+            # After first scan completes, new paths with old mtime are shown (e.g., copied old exe is a new arrival)
+            if started is not None and stat.st_mtime < started - 5:
+                with self._lock:
+                    is_first_scan = self._last_scan_at is None
+                if is_first_scan:
+                    with self._lock:
+                        self._seen[key] = (stat.st_mtime, stat.st_size)
+                    continue
+                # After first scan, only skip if file has been seen before (old file, not new arrival)
+                if last is not None:
+                    with self._lock:
+                        self._seen[key] = (stat.st_mtime, stat.st_size)
+                    continue
+
             stable = self._wait_for_stability(entry)
             if stable is None:
                 continue
             mtime, size = stable
+
+            # Double-check after stability — same first-scan logic
+            if started is not None and mtime < started - 5:
+                with self._lock:
+                    is_first_scan = self._last_scan_at is None
+                if is_first_scan:
+                    with self._lock:
+                        self._seen[key] = (mtime, size)
+                    continue
+                if last is not None:
+                    with self._lock:
+                        self._seen[key] = (mtime, size)
+                    continue
 
             sha256 = self._compute_sha256(entry)
             with self._lock:
@@ -243,6 +299,29 @@ class FileMonitor:
                     # same content as last time (e.g. touched); just refresh seen
                     self._seen[key] = (mtime, size)
                     continue
+
+            is_target = self._is_target(entry, size)
+            if not is_target:
+                # Non-PE file: record for dashboard, do NOT dispatch to malware scan
+                with self._lock:
+                    self._seen[key] = (mtime, size)
+                    self._scanned[key] = sha256
+                    self._all_files_seen += 1
+                    self._recent_all_files.append({
+                        "path": str(entry),
+                        "filename": entry.name,
+                        "size": size,
+                        "extension": entry.suffix.lower(),
+                        "sha256": sha256,
+                        "detected_at": round(self.time_fn(), 3),
+                        "mtime": round(mtime, 3),
+                        "scan_status": "skipped",
+                        "scan_reason": "not a PE executable (no MZ / pe_extension) — no malware scan needed",
+                        "is_pe": False,
+                        "detected_by": "none",
+                        "vulnerability": {"note": "Non-executable file — no PE vulnerability to assess", "risk": "N/A", "attack_surface": "none"},
+                    })
+                continue
 
             detected_by = "extension" if self._is_pe_extension(entry) else "signature"
             if self._is_pe_extension(entry) and size >= 2 and has_pe_signature(entry):
@@ -265,16 +344,77 @@ class FileMonitor:
         total = 0
         for dir_path in self._expand_paths():
             for event in self._scan_directory(dir_path):
+                scan_result = None
                 try:
-                    self.callback(event)
+                    scan_result = self.callback(event)
                 except Exception as exc:  # noqa: BLE001 - a bad handler must not stop scanning
                     logger.exception("Callback failed for %s: %s", event.path, exc)
                     with self._lock:
                         self._errors += 1
+                        # Record failed scan for dashboard visibility
+                        self._all_files_seen += 1
+                        self._recent_all_files.append({
+                            "path": str(event.path),
+                            "filename": event.path.name,
+                            "size": event.size,
+                            "extension": event.extension,
+                            "sha256": event.sha256,
+                            "detected_at": round(event.detected_at, 3),
+                            "mtime": round(event.mtime, 3),
+                            "scan_status": "error",
+                            "scan_reason": str(exc),
+                            "is_pe": True,
+                            "detected_by": event.detected_by,
+                            "vulnerability": {"note": f"Scan failed: {exc}", "risk": "unknown"},
+                        })
                 else:
+                    # Extract vulnerability from callback result if available
+                    vuln = None
+                    scan_dict = None
+                    if isinstance(scan_result, dict):
+                        scan_dict = scan_result
+                        # detection_service / detector returns dict with malware_probability, risk_score, etc.
+                        vuln = {
+                            "malware_probability": scan_dict.get("malware_probability"),
+                            "benign_probability": scan_dict.get("benign_probability"),
+                            "risk_score": scan_dict.get("risk_score"),
+                            "risk_level": scan_dict.get("risk_level"),
+                            "verdict": scan_dict.get("verdict"),
+                            "action": scan_dict.get("action"),
+                            "file_type": scan_dict.get("file_type"),
+                            "model_version": scan_dict.get("model_version"),
+                            "analysis_duration_ms": scan_dict.get("analysis_duration_ms") or scan_dict.get("total_scan_ms"),
+                            "explanation": scan_dict.get("explanation"),
+                            "scan_process": ["stable", "sha256", "feature_extraction", "inference", "risk_engine", "verdict", "quarantine_check"],
+                        }
+                    else:
+                        # Fallback: no vulnerability details yet
+                        vuln = {"note": "Scan dispatched — awaiting result", "risk": "pending"}
+
+                    base = event.to_dict()
                     with self._lock:
                         self._files_analyzed += 1
-                        self._recent_events.append(event.to_dict())
+                        self._all_files_seen += 1
+                        # recent_events stays PE-only for backward compat, but enriched with vulnerability
+                        enriched = {**base, "scan_status": "scanned", "vulnerability": vuln}
+                        if scan_dict:
+                            enriched.update({"scan_result": scan_dict})
+                        self._recent_events.append(enriched)
+                        # also push to all-files feed for dashboard unified view
+                        self._recent_all_files.append({
+                            "path": str(event.path),
+                            "filename": event.path.name,
+                            "size": event.size,
+                            "extension": event.extension,
+                            "sha256": event.sha256,
+                            "detected_at": round(event.detected_at, 3),
+                            "mtime": round(event.mtime, 3),
+                            "scan_status": "scanned",
+                            "is_pe": True,
+                            "detected_by": event.detected_by,
+                            "vulnerability": vuln,
+                            "scan_result": scan_dict,
+                        })
                     logger.info("Dispatched %s (%s, %d bytes, by %s)",
                                 event.path, event.sha256[:12], event.size, event.detected_by)
                 total += 1

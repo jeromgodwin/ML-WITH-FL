@@ -1,45 +1,63 @@
-import React, { useState } from 'react'
-import Overview from './components/Overview'
-import Clients from './components/Clients'
+import React, { useEffect, useState } from 'react'
+import Dashboard from './components/Dashboard'
+import LiveScan from './components/LiveScan'
 import FederatedLearning from './components/FederatedLearning'
-import AlgorithmComparison from './components/AlgorithmComparison'
-import NonIIDAnalysis from './components/NonIIDAnalysis'
-import Resource from './components/Resource'
-import Drift from './components/Drift'
 import Security from './components/Security'
-import Communication from './components/Communication'
-import Privacy from './components/Privacy'
-import EndpointStatus from './components/EndpointStatus'
+import System from './components/System'
 
 const TABS = [
-  'Overview', 'Clients', 'Federated Learning', 'Algorithm Comparison', 'Non-IID Analysis',
-  'Resource', 'Drift', 'Security', 'Communication', 'Privacy', 'Endpoint Status'
+  { id: 'Dashboard', label: 'Dashboard', ico: '◧' },
+  { id: 'Live Scan', label: 'Live Scan', ico: '⬢' },
+  { id: 'Federated', label: 'Federated', ico: '⬡' },
+  { id: 'Security', label: 'Security', ico: '⬔' },
+  { id: 'System', label: 'System', ico: '⬣' },
 ]
 
 const COMPONENTS = {
-  'Overview': Overview,
-  'Clients': Clients,
-  'Federated Learning': FederatedLearning,
-  'Algorithm Comparison': AlgorithmComparison,
-  'Non-IID Analysis': NonIIDAnalysis,
-  'Resource': Resource,
-  'Drift': Drift,
+  'Dashboard': Dashboard,
+  'Live Scan': LiveScan,
+  'Federated': FederatedLearning,
   'Security': Security,
-  'Communication': Communication,
-  'Privacy': Privacy,
-  'Endpoint Status': EndpointStatus,
+  'System': System,
 }
 
 export default function App() {
-  const [tab, setTab] = useState('Overview')
+  const [tab, setTab] = useState('Live Scan')
+  const [health, setHealth] = useState(null)
+
+  useEffect(() => {
+    fetch('/health').then(r => r.json()).then(setHealth).catch(() => setHealth({ status: 'offline' }))
+    const id = setInterval(() => fetch('/health').then(r => r.json()).then(setHealth).catch(() => {}), 8000)
+    return () => clearInterval(id)
+  }, [])
+
   const Comp = COMPONENTS[tab]
+  const live = health?.status === 'ok'
+
   return (
     <>
-      <header><h1>FedShield Control Center</h1><div>Central server-side — endpoint handles files automatically, no file-upload antivirus</div></header>
+      <header>
+        <div className="header-brand">
+          <div className="header-logo">FS</div>
+          <div>
+            <h1>FedShield Control Center</h1>
+            <p>Endpoint · Federated Learning · Live file monitoring — telemetry only, no raw uploads</p>
+          </div>
+        </div>
+        <div className="header-meta">
+          <span className="header-badge">{live ? '● Live' : '○ Offline'} · {health?.secure ? 'Secure' : 'Plain'} · {health?.port || 8000}</span>
+          <span className={`dot ${live ? '' : 'warn'}`} />
+        </div>
+      </header>
       <nav>
         {TABS.map(t => (
-          <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>{t}</button>
+          <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>
+            <span className="ico">{t.ico}</span> {t.label}
+          </button>
         ))}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span className="badge neutral">5 tabs · professional view</span>
+        </div>
       </nav>
       <main>
         <Comp />

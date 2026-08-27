@@ -27,6 +27,7 @@ from backend.services.fl_service import FLService
 from backend.services.resource_service import ResourceService
 from backend.services.drift_service import DriftService
 from backend.services.model_service import ModelService
+from backend.services.monitor_service import MonitorService
 from backend.security.rate_limiter import RateLimiter
 from backend.security.safe_fs import safe_path
 
@@ -55,6 +56,7 @@ def create_app(
     resource_svc = ResourceService()
     drift_svc = DriftService()
     model_svc = ModelService(model_registry)
+    monitor_svc = MonitorService()
 
     app = FastAPI(
         title="FedShield Control Center",
@@ -268,5 +270,23 @@ def create_app(
         if result and "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
         return result or {"status": "rolled back"}
+
+    # 8. MONITOR — file arrival feed + scan process + vulnerability (no raw files)
+    @app.get("/api/v1/monitor/status")
+    def monitor_status():
+        return monitor_svc.get_status()
+
+    @app.get("/api/v1/monitor/files")
+    def monitor_files(limit: int = 20):
+        return monitor_svc.get_recent_files(limit=min(limit, 100))
+
+    @app.get("/api/v1/monitor/detections")
+    def monitor_detections(limit: int = 20):
+        return monitor_svc.get_recent_detections(limit=min(limit, 100))
+
+    @app.get("/api/v1/files/recent")
+    def files_recent(limit: int = 20):
+        # alias for monitor/files
+        return monitor_svc.get_recent_files(limit=min(limit, 100))
 
     return app

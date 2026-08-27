@@ -21,8 +21,8 @@ class DetectionService:
         # Enforce no raw files
         if any(k in payload for k in ("raw_file", "file_bytes", "pe_bytes", "raw_bytes", "file_content")):
             raise ValueError("raw malware files must not be uploaded")
-        # Only keep minimum fields
-        allowed = {"client_id", "detection_id", "timestamp", "sha256", "file_type", "model_version", "malware_probability", "risk_score", "verdict", "action"}
+        # Keep vulnerability + scan process fields for dashboard (no raw files)
+        allowed = {"client_id", "detection_id", "timestamp", "sha256", "file_type", "model_version", "malware_probability", "benign_probability", "risk_score", "risk_level", "verdict", "action", "analysis_duration_ms", "feature_extraction_ms", "inference_ms", "total_scan_ms", "explanation", "explanation_latency_ms", "vulnerability", "scan_result", "scan_process", "scan_status", "filename", "filepath", "is_pe", "detected_by", "analysis"}
         filtered = {k: v for k, v in payload.items() if k in allowed}
         filtered["received_at"] = time.time()
         self._telemetry.append(filtered)

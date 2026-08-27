@@ -58,12 +58,12 @@ def build_callback(cfg: ExperimentConfig, bundle_path: Path, detections_path: Pa
     else:
         logger.warning("analysis disabled (--no-analyze): candidates are logged only")
 
-    def on_event(event: FileEvent) -> None:
+    def on_event(event: FileEvent):
         if detector is None:
             record = event.to_dict()
             record["analysis"] = "skipped"
             _append_detection(record, detections_path)
-            return
+            return record
         result = detector.scan(event.path)
         record = result.to_dict()
         record["analysis"] = "ok" if record["verdict"] != "ERROR" else "error"
@@ -75,6 +75,7 @@ def build_callback(cfg: ExperimentConfig, bundle_path: Path, detections_path: Pa
         logger.info("analyzed %s -> verdict=%s action=%s p=%.4f (scan %.1f ms)",
                     event.path, record["verdict"], record["action"],
                     record["malware_probability"], record["total_scan_ms"])
+        return record
 
     return on_event
 
