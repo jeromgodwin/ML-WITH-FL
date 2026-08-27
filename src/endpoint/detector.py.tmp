@@ -11,11 +11,6 @@ risk score, level, verdict, action, durations).
 
 from __future__ import annotations
 
-import hashlib
-try:
-    import lief
-except ImportError:
-    lief = None
 import time
 import uuid
 from dataclasses import dataclass
@@ -45,7 +40,6 @@ class ScanResult:
     total_ms: float
     explanation: Optional[Dict[str, Any]] = None
     explanation_latency_ms: float = 0.0
-    extra_metadata: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = self.record.to_dict()
@@ -55,8 +49,6 @@ class ScanResult:
         if self.explanation:
             d["explanation"] = self.explanation
             d["explanation_latency_ms"] = round(self.explanation_latency_ms, 3)
-        if self.extra_metadata:
-            d.update(self.extra_metadata)
         return d
 
 
@@ -167,30 +159,7 @@ class AutoDetector:
         )
         # 12. trigger configured action
         self._trigger_action(path, record)
-        
-        # 13. extra metadata for UI
-        extra_metadata = {}
-        try:
-            bytez = path.read_bytes()
-            extra_metadata["md5"] = hashlib.md5(bytez).hexdigest()
-            extra_metadata["sha1"] = hashlib.sha1(bytez).hexdigest()
-        except Exception:
-            pass
-        try:
-            if lief is not None:
-                pe = lief.parse(str(path))
-                if pe is not None:
-                    extra_metadata["pe_info"] = {
-                        "has_header": True,
-                        "has_dos": pe.dos_header is not None,
-                        "sections": len(pe.sections) if hasattr(pe, "sections") else 0,
-                        "imports": len(pe.imports) if hasattr(pe, "imports") else 0,
-                        "entropy": True
-                    }
-        except Exception:
-            pass
-
-        return ScanResult(record, extraction_ms, inference_ms, record.analysis_duration_ms, explanation, explanation_latency_ms, extra_metadata)
+        return ScanResult(record, extraction_ms, inference_ms, record.analysis_duration_ms, explanation, explanation_latency_ms)
 
     # ------------------------------------------------------------------
     def _file_type(self, path: Path) -> str:

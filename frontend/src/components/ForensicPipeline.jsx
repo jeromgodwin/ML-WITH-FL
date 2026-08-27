@@ -98,8 +98,8 @@ export default function ForensicPipeline({ activeFile, events }) {
           case 'hash':
               return [
                   { name: 'SHA-256 Generated', state: f.sha256 ? 'COMPLETE' : isScan ? 'PROCESSING' : 'WAITING', value: f.sha256 },
-                  { name: 'MD5 Generated', state: isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
-                  { name: 'SHA-1 Generated', state: isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
+                  { name: 'MD5 Generated', state: f.md5 ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: f.md5 },
+                  { name: 'SHA-1 Generated', state: f.sha1 ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: f.sha1 },
                   { name: 'Known-Hash Lookup', state: isComp ? 'SKIPPED' : isScan ? 'PROCESSING' : 'WAITING' },
               ];
           case 'features':
@@ -108,11 +108,11 @@ export default function ForensicPipeline({ activeFile, events }) {
               return [
                   { name: 'Metadata Extraction', state: hasFeatures ? 'COMPLETE' : isComp ? 'SKIPPED' : isScan ? 'PROCESSING' : 'WAITING' },
                   { name: 'Feature Vector Construction', state: hasFeatures ? 'COMPLETE' : isComp ? 'SKIPPED' : isScan ? 'PROCESSING' : 'WAITING', value: hasFeatures ? `${fCount} features extracted` : null },
-                  { name: 'PE Header Parsing', state: isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
-                  { name: 'DOS Header Analysis', state: isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
-                  { name: 'Section Extraction', state: isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
-                  { name: 'Import Table Analysis', state: isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
-                  { name: 'Entropy Calculation', state: isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
+                  { name: 'PE Header Parsing', state: f.pe_info?.has_header ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
+                  { name: 'DOS Header Analysis', state: f.pe_info?.has_dos ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
+                  { name: 'Section Extraction', state: f.pe_info?.sections ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: f.pe_info?.sections ? `${f.pe_info.sections} sections` : null },
+                  { name: 'Import Table Analysis', state: f.pe_info?.imports ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING', value: f.pe_info?.imports ? `${f.pe_info.imports} imports` : null },
+                  { name: 'Entropy Calculation', state: f.pe_info?.entropy ? 'COMPLETE' : isComp ? 'UNAVAILABLE' : isScan ? 'PROCESSING' : 'WAITING' },
               ];
           case 'ml':
               const hasProb = f.vulnerability?.malware_probability != null || f.malware_probability != null;
