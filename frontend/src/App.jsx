@@ -428,11 +428,13 @@ export default function App() {
         const arr = Array.isArray(fList) ? fList : []
         setMonitorFiles(arr)
         
-        // Auto-select latest active scan if none selected
-        if(arr.length && !selectedFile) setSelectedFile(arr[0])
-        else if (selectedFile) {
-          const fresh = arr.find(x => x.sha256 === selectedFile.sha256 || x.path === selectedFile.path)
-          if(fresh) setSelectedFile(fresh)
+        // Auto-select latest active scan if none selected, and update data for the selected one
+        if (arr.length > 0) {
+          setSelectedFile(prev => {
+            if (!prev) return arr[0]
+            const fresh = arr.find(x => (x.sha256 && x.sha256 === prev.sha256) || (x.path && x.path === prev.path) || x.filename === prev.filename)
+            return fresh || prev
+          })
         }
         
         // Build timeline
