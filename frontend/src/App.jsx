@@ -12,8 +12,8 @@ const stateFor = (f) => {
   if (f.scan_status === 'skipped') return f.is_pe === false ? 'BENIGN' : 'QUEUED'
   if (f.vulnerability?.verdict === 'HIGH' || f.verdict === 'HIGH') return 'MALICIOUS'
   if (f.vulnerability?.verdict === 'MEDIUM' || f.verdict === 'MEDIUM') return 'SUSPICIOUS'
-  if (f.vulnerability?.verdict === 'ERROR' || f.scan_status === 'error') return 'FAILED'
-  if (f.vulnerability?.verdict === 'LOW') return 'BENIGN'
+  if (f.vulnerability?.verdict === 'ERROR' || f.verdict === 'ERROR' || f.scan_status === 'error') return 'FAILED'
+  if (f.vulnerability?.verdict === 'LOW' || f.verdict === 'LOW') return 'BENIGN'
   if (f.scan_status === 'quarantined' || f.action === 'QUARANTINE') return 'QUARANTINED'
   return 'SCANNING'
 }
@@ -191,7 +191,7 @@ function LiveMonitorView({ monitorFiles, selectedFile, setSelectedFile }) {
             if(idx === 1) return null; // skip extra stage to fit 7 columns cleanly like screenshot
             let stageSt = 'WAITING'
             if (active) {
-              const isComplete = active.vulnerability?.verdict || stateFor(active) === 'BENIGN' || stateFor(active) === 'QUEUED'
+              const isComplete = active.vulnerability?.verdict || active.verdict || stateFor(active) === 'BENIGN' || stateFor(active) === 'QUEUED' || stateFor(active) === 'FAILED' || stateFor(active) === 'MALICIOUS' || stateFor(active) === 'SUSPICIOUS' || stateFor(active) === 'QUARANTINED'
               if (isComplete) stageSt = 'COMPLETE'
               else if (idx <= 3) stageSt = 'COMPLETE' 
               else if (idx === 4 && stateFor(active) === 'SCANNING') stageSt = 'PROCESSING'
