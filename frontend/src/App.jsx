@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import ParallaxBackground from './components/ParallaxBackground'
 import Sidebar from './components/Sidebar'
 import BentoCard, { BentoGrid } from './components/BentoCard'
+import ForensicPipeline from './components/ForensicPipeline'
 
 // Global helper
 const valOrDash = (v) => v == null || v === 0 ? '—' : String(v)
@@ -91,7 +92,7 @@ function OverviewView({ stats, events, monitorFiles, setSelectedFile, setActive 
   )
 }
 
-function LiveMonitorView({ monitorFiles, selectedFile, setSelectedFile }) {
+function LiveMonitorView({ monitorFiles, selectedFile, setSelectedFile, events }) {
   const active = selectedFile
 
   return (
@@ -185,34 +186,9 @@ function LiveMonitorView({ monitorFiles, selectedFile, setSelectedFile }) {
       </BentoGrid>
 
       {/* PIPELINE STAGES */}
-      <BentoCard span="col-span-12" eyebrow="LIVE SCAN PIPELINE" title="Processing Stages" glow="cyan">
-        <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mt-4">
-          {["FILE DETECTED", "IDENTIFIED", "HASH", "FEATURES", "ML ANALYSIS", "SECURITY", "RISK", "RESULT"].map((stage, idx) => {
-            if(idx === 1) return null; // skip extra stage to fit 7 columns cleanly like screenshot
-            let stageSt = 'WAITING'
-            if (active) {
-              const isComplete = active.vulnerability?.verdict || active.verdict || stateFor(active) === 'BENIGN' || stateFor(active) === 'QUEUED' || stateFor(active) === 'FAILED' || stateFor(active) === 'MALICIOUS' || stateFor(active) === 'SUSPICIOUS' || stateFor(active) === 'QUARANTINED'
-              if (isComplete) stageSt = 'COMPLETE'
-              else if (idx <= 3) stageSt = 'COMPLETE' 
-              else if (idx === 4 && stateFor(active) === 'SCANNING') stageSt = 'PROCESSING'
-            }
-            
-            return (
-              <div key={stage} className={`module-bevel p-3 rounded-xl text-[10px] font-mono flex flex-col items-center justify-center text-center
-                ${stageSt === 'COMPLETE' ? 'opacity-100 bg-console-green/5 ring-1 ring-console-green/20' : stageSt === 'PROCESSING' ? 'opacity-100 bg-console-cyan/10 ring-1 ring-console-cyan/50' : 'opacity-40'}
-              `}>
-                <div className="font-bold text-white mb-2">{stage}</div>
-                <div className="flex flex-col items-center gap-1">
-                  <div className={`led ${stageSt === 'COMPLETE' ? 'led-green' : stageSt === 'PROCESSING' ? 'led-cyan animate-pulse' : 'led-off'}`} />
-                  <span className={`font-bold ${stageSt === 'COMPLETE' ? 'text-console-green' : stageSt === 'PROCESSING' ? 'text-console-cyan' : 'text-zinc-500'}`}>
-                    {stageSt === 'COMPLETE' ? '✓ COMPLETE' : stageSt === 'PROCESSING' ? '● PROCESSING' : '○ WAITING'}
-                  </span>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </BentoCard>
+      <div className="mt-8">
+          <ForensicPipeline activeFile={active} events={events} />
+      </div>
     </div>
   )
 }
@@ -492,7 +468,7 @@ export default function App() {
       case 'overview':
         return <OverviewView stats={stats} events={events} monitorFiles={monitorFiles} setSelectedFile={setSelectedFile} setActive={setActive} />
       case 'monitor':
-        return <LiveMonitorView monitorFiles={monitorFiles} selectedFile={selectedFile} setSelectedFile={setSelectedFile} />
+        return <LiveMonitorView monitorFiles={monitorFiles} selectedFile={selectedFile} setSelectedFile={setSelectedFile} events={events} />
       case 'analysis':
         return <FileAnalysisView selectedFile={selectedFile} isQuarantining={isQuarantining} handleQuarantine={handleQuarantine} />
       case 'threats':
