@@ -217,8 +217,13 @@ class FileMonitor:
 
     def _scan_directory(self, dir_path: Path) -> list[FileEvent]:
         events = []
+        # Ignore transient download temp files (Chrome, Firefox, etc.)
+        TEMP_IGNORE = {".crdownload", ".tmp", ".part", ".download", ".opdownload", ".temp", ".partial", ".lock"}
         for entry in self._scan_tree(dir_path):
             if not entry.is_file():
+                continue
+            # Skip temp/download artifacts and hidden files
+            if entry.suffix.lower() in TEMP_IGNORE or entry.name.startswith("Unconfirmed") or entry.name.startswith("."):
                 continue
             try:
                 stat = entry.stat()
